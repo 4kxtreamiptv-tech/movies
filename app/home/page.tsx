@@ -549,20 +549,25 @@ export default function HomePage() {
         for (const category of categoryConfig) {
           const apiCategory = categoryMap[category.name];
           if (apiCategory && data.sections[apiCategory]) {
-            // Don't overwrite Suggestions if we've already set it from reference mapping
-            if (category.name === "Suggestions" && categories["Suggestions"]?.length) {
-              continue;
-            }
             categoriesData[category.name] = data.sections[apiCategory];
             console.log(`✅ ${category.name}: ${data.sections[apiCategory].length} unique movies loaded`);
           }
         }
         
-        setCategories((prev) => ({ ...prev, ...categoriesData }));
+        // Never overwrite Suggestions if it was already set (e.g. from reference mapping)
+        setCategories((prev) => {
+          const next = { ...prev, ...categoriesData };
+          if (prev.Suggestions) {
+            next.Suggestions = prev.Suggestions;
+          }
+          return next;
+        });
         
-        // Only set initial allMovies from sections if Suggestions is still empty
-        if (!categories["Suggestions"]?.length && data.sections.suggestions) {
-          setAllMovies(data.sections.suggestions);
+        // Set initial movies to suggestions only if allMovies is still empty
+        if (data.sections.suggestions) {
+          setAllMovies((prev) =>
+            prev && prev.length > 0 ? prev : data.sections.suggestions
+          );
         }
       } else {
         console.log('⚠️ Sections API failed, using individual category loading');
@@ -589,11 +594,6 @@ export default function HomePage() {
                 };
         
         const apiCategory = apiCategoryMap[category.name] || "latest";
-
-        // Don't overwrite Suggestions if we've already got reference-based ones
-        if (category.name === "Suggestions" && categories["Suggestions"]?.length) {
-          continue;
-        }
         const response = await fetch(`/api/movies/latest?category=${apiCategory}&limit=${category.count}`);
         const data = await response.json();
         
@@ -610,11 +610,20 @@ export default function HomePage() {
         }
       }
       
-      setCategories((prev) => ({ ...prev, ...categoriesData }));
+      // Never overwrite Suggestions if it was already set (e.g. from reference mapping)
+      setCategories((prev) => {
+        const next = { ...prev, ...categoriesData };
+        if (prev.Suggestions) {
+          next.Suggestions = prev.Suggestions;
+        }
+        return next;
+      });
       
-      // Only set initial allMovies if Suggestions still empty
-      if (!categories["Suggestions"]?.length && categoriesData["Suggestions"]) {
-        setAllMovies(categoriesData["Suggestions"]);
+      // Set initial movies to suggestions only if allMovies is still empty
+      if (categoriesData["Suggestions"]) {
+        setAllMovies((prev) =>
+          prev && prev.length > 0 ? prev : categoriesData["Suggestions"]!
+        );
       }
     } catch (error) {
       console.error('Error loading categories individually:', error);
