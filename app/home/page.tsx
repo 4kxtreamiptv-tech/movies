@@ -549,15 +549,19 @@ export default function HomePage() {
         for (const category of categoryConfig) {
           const apiCategory = categoryMap[category.name];
           if (apiCategory && data.sections[apiCategory]) {
+            // Don't overwrite Suggestions if we've already set it from reference mapping
+            if (category.name === "Suggestions" && categories["Suggestions"]?.length) {
+              continue;
+            }
             categoriesData[category.name] = data.sections[apiCategory];
             console.log(`✅ ${category.name}: ${data.sections[apiCategory].length} unique movies loaded`);
           }
         }
         
-        setCategories(categoriesData);
+        setCategories((prev) => ({ ...prev, ...categoriesData }));
         
-        // Set initial movies to suggestions
-        if (data.sections.suggestions) {
+        // Only set initial allMovies from sections if Suggestions is still empty
+        if (!categories["Suggestions"]?.length && data.sections.suggestions) {
           setAllMovies(data.sections.suggestions);
         }
       } else {
@@ -585,6 +589,11 @@ export default function HomePage() {
                 };
         
         const apiCategory = apiCategoryMap[category.name] || "latest";
+
+        // Don't overwrite Suggestions if we've already got reference-based ones
+        if (category.name === "Suggestions" && categories["Suggestions"]?.length) {
+          continue;
+        }
         const response = await fetch(`/api/movies/latest?category=${apiCategory}&limit=${category.count}`);
         const data = await response.json();
         
@@ -601,10 +610,10 @@ export default function HomePage() {
         }
       }
       
-      setCategories(categoriesData);
+      setCategories((prev) => ({ ...prev, ...categoriesData }));
       
-      // Set initial movies to suggestions
-      if (categoriesData["Suggestions"]) {
+      // Only set initial allMovies if Suggestions still empty
+      if (!categories["Suggestions"]?.length && categoriesData["Suggestions"]) {
         setAllMovies(categoriesData["Suggestions"]);
       }
     } catch (error) {
