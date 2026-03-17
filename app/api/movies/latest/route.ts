@@ -88,11 +88,8 @@ export async function GET(request: NextRequest) {
         break;
         
       case 'latest':
-        // Most recent movies by year
-        const latestYear = Math.max(...allMovies.map(m => m.year));
-        selectedMovies = allMovies
-          .filter(movie => movie.year === latestYear)
-          .slice(0, limit);
+        // Latest movies overall (already sorted newest-first)
+        selectedMovies = allMovies.slice(0, limit);
         break;
         
       case 'trending':

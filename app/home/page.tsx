@@ -330,6 +330,9 @@ export default function HomePage() {
   const [popularTvSeries, setPopularTvSeries] = useState<any[]>([]);
   const [featuredTvSeries, setFeaturedTvSeries] = useState<any[]>([]);
   const [itemsPerRow, setItemsPerRow] = useState(12);
+  const DISPLAY_COUNT = 12;
+  const homeGridClass =
+    "grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-4";
   
   // Mode switching state - Default to MOVIES
   const [currentMode, setCurrentMode] = useState<'movies' | 'tv'>('movies');
@@ -398,17 +401,91 @@ export default function HomePage() {
   // Load "Latest Movies" and "Latest TV-Series" sections like reference site
   useEffect(() => {
     (async () => {
+      // 1) Try to match reference site's Suggestions + Latest Movies by their titles.
+      // If this fails, we just fall back to our own data below.
       try {
-        // Fetch more than we render (we render exactly 2 rows)
-        const latestRes = await fetch(`/api/movies/latest?category=latest&limit=60`);
-        const latestData = await latestRes.json();
-        if (latestRes.ok && Array.isArray(latestData.movies)) {
-          setLatestMovies(latestData.movies);
+        const refRes = await fetch(`/api/reference/home-mapped`);
+        const refData = await refRes.json();
+        if (refRes.ok) {
+          const suggestionsIds = (refData.suggestionsImdbIds || []) as string[];
+          const latestIds = (refData.latestMoviesImdbIds || []) as string[];
+
+          // Map "Suggestions" titles -> our movies
+          if (suggestionsIds.length) {
+            const mappedSuggestions = await getMoviesByImdbIds(suggestionsIds);
+            if (mappedSuggestions.length) {
+              // If less than DISPLAY_COUNT, top-up from our own Suggestions API
+              let finalSuggestions = mappedSuggestions.slice(0, DISPLAY_COUNT);
+              if (finalSuggestions.length < DISPLAY_COUNT) {
+                try {
+                  const moreRes = await fetch(
+                    `/api/movies/latest?category=suggestions&limit=${DISPLAY_COUNT}`
+                  );
+                  const moreData = await moreRes.json();
+                  if (moreRes.ok && Array.isArray(moreData.movies)) {
+                    for (const m of moreData.movies) {
+                      if (
+                        finalSuggestions.length >= DISPLAY_COUNT ||
+                        finalSuggestions.some((x) => x.imdb_id === m.imdb_id)
+                      ) {
+                        continue;
+                      }
+                      finalSuggestions.push(m);
+                    }
+                  }
+                } catch {
+                  // ignore top-up errors
+                }
+              }
+              setAllMovies(finalSuggestions);
+              setCategories((prev) => ({ ...prev, Suggestions: finalSuggestions }));
+            }
+          }
+
+          // Map "Latest Movies" titles -> our movies
+          if (latestIds.length) {
+            const mappedLatest = await getMoviesByImdbIds(latestIds);
+            if (mappedLatest.length) {
+              let finalLatest = mappedLatest.slice(0, DISPLAY_COUNT);
+              if (finalLatest.length < DISPLAY_COUNT) {
+                try {
+                  const moreRes = await fetch(
+                    `/api/movies/latest?category=latest&limit=${DISPLAY_COUNT}`
+                  );
+                  const moreData = await moreRes.json();
+                  if (moreRes.ok && Array.isArray(moreData.movies)) {
+                    for (const m of moreData.movies) {
+                      if (
+                        finalLatest.length >= DISPLAY_COUNT ||
+                        finalLatest.some((x) => x.imdb_id === m.imdb_id)
+                      ) {
+                        continue;
+                      }
+                      finalLatest.push(m);
+                    }
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+              setLatestMovies(finalLatest);
+            }
+          }
         }
       } catch {}
 
       try {
-        const tvRes = await fetch(`/api/tv-series-db?limit=60&sortBy=first_air_date&sortOrder=desc`);
+        // Fetch more than we render (we render exactly 2 rows)
+        const latestRes = await fetch(`/api/movies/latest?category=latest&limit=${DISPLAY_COUNT}`);
+        const latestData = await latestRes.json();
+        if (latestRes.ok && Array.isArray(latestData.movies)) {
+          // Only overwrite if we didn't already map from reference
+          setLatestMovies((prev) => (prev?.length ? prev : latestData.movies));
+        }
+      } catch {}
+
+      try {
+        const tvRes = await fetch(`/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=first_air_date&sortOrder=desc`);
         const tvData = await tvRes.json();
         if (tvRes.ok && tvData?.success && Array.isArray(tvData.data)) {
           setLatestTvSeries(tvData.data);
@@ -416,7 +493,7 @@ export default function HomePage() {
       } catch {}
 
       try {
-        const tvRes = await fetch(`/api/tv-series-db?limit=60&sortBy=vote_average&sortOrder=desc&minRating=7.0`);
+        const tvRes = await fetch(`/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=vote_average&sortOrder=desc&minRating=7.0`);
         const tvData = await tvRes.json();
         if (tvRes.ok && tvData?.success && Array.isArray(tvData.data)) {
           setPopularTvSeries(tvData.data);
@@ -424,7 +501,7 @@ export default function HomePage() {
       } catch {}
 
       try {
-        const tvRes = await fetch(`/api/tv-series-db?limit=60&sortBy=vote_average&sortOrder=desc&minRating=8.0`);
+        const tvRes = await fetch(`/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=vote_average&sortOrder=desc&minRating=8.0`);
         const tvData = await tvRes.json();
         if (tvRes.ok && tvData?.success && Array.isArray(tvData.data)) {
           setFeaturedTvSeries(tvData.data);
@@ -560,7 +637,7 @@ export default function HomePage() {
               priority
             />
             <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent" />
-            <div className="absolute bottom-6 left-6 hidden md:block max-w-xl">
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 hidden md:block w-full max-w-xl px-4 text-center">
               <h2 className="text-3xl font-bold text-white mb-2">
                 {currentMode === "movies" ? "Featured Movie" : "Featured TV"}
               </h2>
@@ -569,11 +646,11 @@ export default function HomePage() {
                   ? "Watch HD Movies Online Free"
                   : "Watch HD TV Series Online Free"}
               </p>
-              {/* Movies / TV switch (keep as before) */}
-              <div className="flex items-center gap-3 mb-3">
+              {/* Movies / TV switch (bigger + centered like reference) */}
+              <div className="flex items-center justify-center gap-4 mb-3">
                 <button
                   onClick={switchToMovies}
-                  className={`px-4 py-2 rounded font-semibold text-sm transition-colors ${
+                  className={`px-6 py-3 rounded-md font-bold text-base transition-colors ${
                     currentMode === "movies"
                       ? "bg-[#79c142] text-white"
                       : "bg-white/90 text-gray-900 hover:bg-white"
@@ -583,7 +660,7 @@ export default function HomePage() {
                 </button>
                 <button
                   onClick={switchToTV}
-                  className={`px-4 py-2 rounded font-semibold text-sm transition-colors ${
+                  className={`px-6 py-3 rounded-md font-bold text-base transition-colors ${
                     currentMode === "tv"
                       ? "bg-[#79c142] text-white"
                       : "bg-white/90 text-gray-900 hover:bg-white"
@@ -600,11 +677,12 @@ export default function HomePage() {
               </Link>
             </div>
 
-            {/* Mobile switch (visible under hero on small screens) */}
-            <div className="absolute bottom-4 left-4 right-4 md:hidden flex items-center justify-between gap-3">
+            {/* Mobile switch (bigger + centered) */}
+            <div className="absolute bottom-4 left-4 right-4 md:hidden flex items-center justify-center">
+              <div className="w-full max-w-[360px] flex items-center justify-center gap-4">
               <button
                 onClick={switchToMovies}
-                className={`flex-1 py-2 rounded font-semibold text-sm transition-colors ${
+                className={`flex-1 py-3 rounded-md font-bold text-base transition-colors ${
                   currentMode === "movies"
                     ? "bg-[#79c142] text-white"
                     : "bg-white/90 text-gray-900"
@@ -614,7 +692,7 @@ export default function HomePage() {
               </button>
               <button
                 onClick={switchToTV}
-                className={`flex-1 py-2 rounded font-semibold text-sm transition-colors ${
+                className={`flex-1 py-3 rounded-md font-bold text-base transition-colors ${
                   currentMode === "tv"
                     ? "bg-[#79c142] text-white"
                     : "bg-white/90 text-gray-900"
@@ -622,6 +700,7 @@ export default function HomePage() {
               >
                 TV Series
               </button>
+              </div>
             </div>
             <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-2">
               {[1, 2, 3, 4, 5].map((dot) => (
@@ -655,8 +734,8 @@ export default function HomePage() {
                   </div>
                 </div>
                 {loading ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-                    {Array.from({ length: itemsPerRow * 2 }).map((_, i) => (
+                  <div className={homeGridClass}>
+                    {Array.from({ length: DISPLAY_COUNT }).map((_, i) => (
                       <div key={i} className="bg-white rounded shadow overflow-hidden">
                         <div className="aspect-[2/3] bg-gray-200 animate-pulse" />
                         <div className="h-8 bg-black/80" />
@@ -664,8 +743,8 @@ export default function HomePage() {
                     ))}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-                    {allMovies.slice(0, itemsPerRow * 2).map((movie, index) => (
+                  <div className={homeGridClass}>
+                    {allMovies.slice(0, DISPLAY_COUNT).map((movie, index) => (
                       <Link
                         key={`${movie.imdb_id}-${index}`}
                         href={generateMovieUrl(movie.title, movie.imdb_id)}
@@ -696,102 +775,90 @@ export default function HomePage() {
                 )}
               </section>
 
-              {/* Trending Now */}
+              {/* Latest Movies */}
               <section>
                 <div className="mb-3">
                   <div className="inline-flex items-center bg-[#79c142] text-white text-sm font-semibold px-3 py-1 rounded">
-                    Trending Now
+                    Latest Movies
                   </div>
                 </div>
-                {loading ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-                    {Array.from({ length: itemsPerRow * 2 }).map((_, i) => (
-                      <div key={i} className="bg-white rounded shadow overflow-hidden">
-                        <div className="aspect-[2/3] bg-gray-200 animate-pulse" />
-                        <div className="h-8 bg-black/80" />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-                    {(categories["Trending Now"] || []).slice(0, itemsPerRow * 2).map((movie, index) => (
-                      <Link
-                        key={`trending-${movie.imdb_id}-${index}`}
-                        href={generateMovieUrl(movie.title, movie.imdb_id)}
-                        className="group block"
-                      >
-                        <div className="bg-white rounded shadow overflow-hidden">
-                          <div className="relative aspect-[2/3]">
-                            <Image
-                              src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : "/placeholder.svg"}
-                              alt={movie.title}
-                              fill
-                              className="object-cover"
-                              unoptimized={true}
-                            />
-                            <span className="absolute top-2 right-2 bg-[#79c142] text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                              HD
-                            </span>
-                          </div>
-                          <div className="bg-black px-2 py-2">
-                            <div className="text-white text-xs font-semibold line-clamp-1">
-                              {movie.title}
-                            </div>
+                <div className={homeGridClass}>
+                  {(latestMovies || []).slice(0, DISPLAY_COUNT).map((movie: any, index: number) => (
+                    <Link
+                      key={`latest-m-${movie.imdb_id ?? index}-${index}`}
+                      href={generateMovieUrl(movie.title, movie.imdb_id)}
+                      className="group block"
+                    >
+                      <div className="bg-white rounded shadow overflow-hidden">
+                        <div className="relative aspect-[2/3]">
+                          <Image
+                            src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : "/placeholder.svg"}
+                            alt={movie.title}
+                            fill
+                            className="object-cover"
+                            unoptimized={true}
+                          />
+                          <span className="absolute top-2 right-2 bg-[#79c142] text-white text-[10px] font-bold px-2 py-0.5 rounded">
+                            HD
+                          </span>
+                        </div>
+                        <div className="bg-black px-2 py-2">
+                          <div className="text-white text-xs font-semibold line-clamp-1">
+                            {movie.title}
                           </div>
                         </div>
-                      </Link>
-                    ))}
-                  </div>
-                )}
+                      </div>
+                    </Link>
+                  ))}
+                </div>
               </section>
 
-              {/* Top Rated */}
+              {/* Latest TV-Series (also visible on Movies home like reference) */}
               <section>
                 <div className="mb-3">
                   <div className="inline-flex items-center bg-[#79c142] text-white text-sm font-semibold px-3 py-1 rounded">
-                    Top Rated
+                    Latest TV-Series
                   </div>
                 </div>
-                {loading ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-                    {Array.from({ length: itemsPerRow * 2 }).map((_, i) => (
-                      <div key={i} className="bg-white rounded shadow overflow-hidden">
-                        <div className="aspect-[2/3] bg-gray-200 animate-pulse" />
-                        <div className="h-8 bg-black/80" />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-                    {(categories["Top Rated"] || []).slice(0, itemsPerRow * 2).map((movie, index) => (
-                      <Link
-                        key={`top-${movie.imdb_id}-${index}`}
-                        href={generateMovieUrl(movie.title, movie.imdb_id)}
-                        className="group block"
-                      >
+                <div className={homeGridClass}>
+                  {latestTvSeries.slice(0, DISPLAY_COUNT).map((series: any, index: number) => {
+                    const name = series.name || `TV Series ${series.imdb_id || series.tmdb_id || index}`;
+                    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+                    const href = `/${slug}-${series.tmdb_id || series.tmdbId || series.imdb_id || series.imdbId || ""}`;
+                    const eps =
+                      series?.seasons?.reduce?.((sum: number, s: any) => sum + (s?.episodes?.length || 0), 0) ||
+                      series?.episodeCount ||
+                      0;
+                    return (
+                      <Link key={`tv-latest-movies-${series.tmdb_id ?? series.imdb_id ?? index}-${index}`} href={href} className="group block">
                         <div className="bg-white rounded shadow overflow-hidden">
                           <div className="relative aspect-[2/3]">
                             <Image
-                              src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : "/placeholder.svg"}
-                              alt={movie.title}
+                              src={series.poster_path ? getTVImageUrl(series.poster_path, "w500") : "/placeholder.svg"}
+                              alt={name}
                               fill
                               className="object-cover"
                               unoptimized={true}
                             />
                             <span className="absolute top-2 right-2 bg-[#79c142] text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                              HD
+                              TV
                             </span>
+                            {eps > 0 && (
+                              <span className="absolute top-2 left-2 bg-black/70 text-white text-[10px] font-bold px-2 py-0.5 rounded">
+                                Eps {eps}
+                              </span>
+                            )}
                           </div>
                           <div className="bg-black px-2 py-2">
                             <div className="text-white text-xs font-semibold line-clamp-1">
-                              {movie.title}
+                              {name}
                             </div>
                           </div>
                         </div>
                       </Link>
-                    ))}
-                  </div>
-                )}
+                    );
+                  })}
+                </div>
               </section>
             </>
           ) : (
@@ -803,8 +870,8 @@ export default function HomePage() {
                     Latest TV-Series
                   </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-                  {latestTvSeries.slice(0, itemsPerRow * 2).map((series: any, index: number) => {
+                <div className={homeGridClass}>
+                  {latestTvSeries.slice(0, DISPLAY_COUNT).map((series: any, index: number) => {
                     const name = series.name || `TV Series ${series.imdb_id || series.tmdb_id || index}`;
                     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
                     const href = `/${slug}-${series.tmdb_id || series.tmdbId || series.imdb_id || series.imdbId || ""}`;
@@ -851,8 +918,8 @@ export default function HomePage() {
                     Popular TV-Series
                   </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-                  {popularTvSeries.slice(0, itemsPerRow * 2).map((series: any, index: number) => {
+                <div className={homeGridClass}>
+                  {popularTvSeries.slice(0, DISPLAY_COUNT).map((series: any, index: number) => {
                     const name = series.name || `TV Series ${series.imdb_id || series.tmdb_id || index}`;
                     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
                     const href = `/${slug}-${series.tmdb_id || series.tmdbId || series.imdb_id || series.imdbId || ""}`;
@@ -899,8 +966,8 @@ export default function HomePage() {
                     Featured TV-Series
                   </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-4">
-                  {featuredTvSeries.slice(0, itemsPerRow * 2).map((series: any, index: number) => {
+                <div className={homeGridClass}>
+                  {featuredTvSeries.slice(0, DISPLAY_COUNT).map((series: any, index: number) => {
                     const name = series.name || `TV Series ${series.imdb_id || series.tmdb_id || index}`;
                     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
                     const href = `/${slug}-${series.tmdb_id || series.tmdbId || series.imdb_id || series.imdbId || ""}`;
