@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb-client';
-
 import { getBaseUrlForBuild } from '@/lib/domain';
 
 const DOMAIN = getBaseUrlForBuild();
-const ITEMS_PER_SITEMAP = 1000; // 1k per sitemap
+// 50k movies / 50k series per sitemap chunk
+const ITEMS_PER_SITEMAP = 50000;
 
 export async function GET() {
   try {
@@ -29,9 +29,6 @@ export async function GET() {
     } catch (error) {
       console.error('Error fetching series count:', error);
     }
-    
-    console.log(`Total movies: ${totalMovies}, Number of movie sitemaps: ${numberOfMovieSitemaps}`);
-    console.log(`Total series: ${totalSeries}, Number of series sitemaps: ${numberOfSeriesSitemaps}`);
     
     const lastmod = new Date().toISOString();
     
