@@ -1,80 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { getCachedMoviesData } from '@/lib/serverMovieCache';
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const limit = parseInt(searchParams.get('limit') || '20');
 
-    // Path to batch result files
-    const scriptsDir = path.join(process.cwd(), 'scripts');
-    
-    if (!fs.existsSync(scriptsDir)) {
+    const moviesData = getCachedMoviesData();
+    if (!moviesData.available) {
       return NextResponse.json({
         sections: {},
-        message: 'Movie data not available yet'
+        message: moviesData.message || 'Movie data not available yet'
       });
     }
-
-    // Get all batch result files
-    const batchFiles = fs.readdirSync(scriptsDir)
-      .filter(file => file.startsWith('batch-') && file.endsWith('-results.json'))
-      .sort((a, b) => {
-        const aNum = parseInt(a.match(/batch-(\d+)-results\.json/)?.[1] || '0');
-        const bNum = parseInt(b.match(/batch-(\d+)-results\.json/)?.[1] || '0');
-        return aNum - bNum;
-      });
-
-    // Collect all movies with year data
-    const allMovies: any[] = [];
-
-    for (const batchFile of batchFiles) {
-      try {
-        const batchPath = path.join(scriptsDir, batchFile);
-        const batchData = JSON.parse(fs.readFileSync(batchPath, 'utf8'));
-        
-        batchData.forEach((movie: any) => {
-          if (movie.year && movie.poster) {
-            allMovies.push({
-              ...movie,
-              id: movie.imdbId || movie.id,
-              imdb_id: movie.imdbId,
-              title: movie.title,
-              year: movie.year,
-              poster_path: movie.poster,
-              backdrop_path: movie.backdrop,
-              overview: movie.overview,
-              vote_average: movie.rating,
-              release_date: movie.release_date,
-              runtime: movie.runtime,
-              original_language: movie.language,
-              genres: movie.genres || []
-            });
-          }
-        });
-      } catch (error) {
-        console.error(`Error reading batch file ${batchFile}:`, error);
-      }
-    }
-
-    // Sort movies latest-first:
-    // - year desc
-    // - release_date desc (fallback to year)
-    // - rating desc
-    allMovies.sort((a, b) => {
-      const ay = a.year || 0;
-      const by = b.year || 0;
-      if (by !== ay) return by - ay;
-
-      const ad = a.release_date ? Date.parse(a.release_date) : Date.parse(`${ay}-01-01`);
-      const bd = b.release_date ? Date.parse(b.release_date) : Date.parse(`${by}-01-01`);
-      if (bd !== ad) return bd - ad;
-
-      return (b.vote_average || 0) - (a.vote_average || 0);
-    });
-
-    const latestYear = Math.max(...allMovies.map(m => m.year));
+    const allMovies = moviesData.allMovies;
+    const latestYear = moviesData.latestYear || Math.max(...allMovies.map(m => m.year));
     const usedMovieIds = new Set<string>();
 
     // Helper function to get unique movies

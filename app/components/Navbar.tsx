@@ -9,6 +9,7 @@ import { generateMovieUrl } from "@/lib/slug";
 import Image from "next/image";
 import { getYear } from "@/api/tmdb";
 import SiteLogo from "@/components/SiteLogo";
+import { resolvePosterUrl } from "@/lib/poster";
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -314,6 +315,12 @@ export default function Navbar() {
             >
               HOME
             </Link>
+            <Link
+              href="/movies"
+              className="text-gray-300 hover:text-[#3fae2a] transition-colors font-medium"
+            >
+              MOVIES
+            </Link>
             
             {/* Genres Dropdown */}
             <div className="relative group">
@@ -577,6 +584,13 @@ export default function Navbar() {
             >
               Genres
             </Link>
+            <Link
+              href="/movies"
+              className="text-gray-300 hover:text-white block px-3 py-2 rounded-md text-base font-medium transition-colors"
+              onClick={() => setIsMenuOpen(false)}
+            >
+              Movies
+            </Link>
             <Link 
               href="/country" 
               className="text-gray-300 hover:text-white block px-3 py-2 rounded-md text-base font-medium transition-colors"
@@ -635,7 +649,7 @@ export default function Navbar() {
                   >
                     <div className="relative w-16 h-24 flex-shrink-0 rounded overflow-hidden bg-gray-800">
                       <Image
-                        src={movie.poster_path ? `https://image.tmdb.org/t/p/w200${movie.poster_path}` : '/placeholder.svg'}
+                        src={resolvePosterUrl(movie.poster_path, "w200")}
                         alt={movie.title}
                         fill
                         className="object-cover"

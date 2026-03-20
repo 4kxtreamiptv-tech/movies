@@ -235,7 +235,25 @@ export function getTVImageUrl(path: string | null | undefined, size: 'w92' | 'w1
   if (!path || path.trim() === '') {
     return '/placeholder.svg';
   }
-  return `https://image.tmdb.org/t/p/${size}${path}`;
+  const normalizedPath = path.trim();
+
+  // Already a complete URL
+  if (/^https?:\/\//i.test(normalizedPath)) {
+    return normalizedPath;
+  }
+
+  // Protocol-relative URL: //image.tmdb.org/...
+  if (normalizedPath.startsWith('//')) {
+    return `https:${normalizedPath}`;
+  }
+
+  // Host-only URL without protocol: image.tmdb.org/...
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(normalizedPath)) {
+    return `https://${normalizedPath}`;
+  }
+
+  const tmdbPath = normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`;
+  return `https://image.tmdb.org/t/p/${size}${tmdbPath}`;
 }
 
 // Helper function to format season/episode number (e.g., S01E01)

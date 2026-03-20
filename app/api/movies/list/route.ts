@@ -12,19 +12,36 @@ export async function GET(request: NextRequest) {
     const order = (searchParams.get('order') || 'desc').toLowerCase(); // desc = latest-first
 
     const { VID_SRC_LATEST_MOVIES } = await import('@/data/vidsrcLatestMovies');
-    const list =
-      order === 'asc' ? VID_SRC_LATEST_MOVIES : [...VID_SRC_LATEST_MOVIES].reverse();
-    const slice = list.slice(offset, offset + limit);
-    const imdb_ids = slice
-      .map((m) => m.imdb_id)
-      .filter((id): id is string => !!id && id.trim() !== '');
+    const hasVidsrcData = Array.isArray(VID_SRC_LATEST_MOVIES) && VID_SRC_LATEST_MOVIES.length > 0;
+
+    let imdb_ids: string[] = [];
+    let total = 0;
+    let source: 'vidsrc' | 'bulk' = 'vidsrc';
+
+    if (hasVidsrcData) {
+      const list =
+        order === 'asc' ? VID_SRC_LATEST_MOVIES : [...VID_SRC_LATEST_MOVIES].reverse();
+      const slice = list.slice(offset, offset + limit);
+      imdb_ids = slice
+        .map((m) => m.imdb_id)
+        .filter((id): id is string => !!id && id.trim() !== '');
+      total = VID_SRC_LATEST_MOVIES.length;
+    } else {
+      // Fallback when vidsrc list is empty in repo: use static bulk movie IDs.
+      const { BULK_MOVIE_IDS } = await import('@/data/bulkMovieIds');
+      const list = order === 'asc' ? BULK_MOVIE_IDS : [...BULK_MOVIE_IDS].reverse();
+      imdb_ids = list.slice(offset, offset + limit).filter((id) => !!id && id.trim() !== '');
+      total = BULK_MOVIE_IDS.length;
+      source = 'bulk';
+    }
 
     return NextResponse.json({
       imdb_ids,
-      total: VID_SRC_LATEST_MOVIES.length,
+      total,
       offset,
       limit: imdb_ids.length,
       order,
+      source,
     });
   } catch (error) {
     console.error('Error in /api/movies/list:', error);

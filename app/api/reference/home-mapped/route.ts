@@ -63,9 +63,14 @@ async function mapTitlesToImdbIds(titles: string[]): Promise<string[]> {
 
 export async function GET() {
   try {
+    // Optional: force refresh only when explicitly requested.
+    // Default behavior is storage-first to avoid expensive remapping/searching.
+    const shouldRefresh =
+      process.env.REF_HOME_REFRESH_ON_REQUEST === "1";
+
     // 0) Local disk cache (for dev): if file exists, use it and DO NOT re-search.
     try {
-      if (fs.existsSync(DISK_FILE)) {
+      if (!shouldRefresh && fs.existsSync(DISK_FILE)) {
         const raw = fs.readFileSync(DISK_FILE, "utf8");
         const diskData = JSON.parse(raw) as Payload;
         return NextResponse.json(diskData, {
@@ -76,10 +81,21 @@ export async function GET() {
       // ignore disk errors; we'll fall back to in-memory / live fetch
     }
 
-    if (cache && Date.now() - cache.at < TTL_MS) {
+    if (!shouldRefresh && cache && Date.now() - cache.at < TTL_MS) {
       return NextResponse.json(cache.data, {
         headers: { "Cache-Control": "public, max-age=600" },
       });
+    }
+
+    if (!shouldRefresh && !fs.existsSync(DISK_FILE)) {
+      return NextResponse.json(
+        {
+          error: "Stored mapping not found",
+          suggestionsImdbIds: [],
+          latestMoviesImdbIds: [],
+        },
+        { status: 404 }
+      );
     }
 
     const res = await fetch(SOURCE_URL, {

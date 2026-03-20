@@ -56,6 +56,20 @@ interface SeasonData {
   }[];
 }
 
+function getSeasonThumbnailSrc(season: SeasonData, series: { poster_path?: string | null; backdrop_path?: string | null }) {
+  const episodeStillPath = season.episodes.find((episode) => Boolean(episode.still_path))?.still_path;
+  if (episodeStillPath) {
+    return getTVImageUrl(episodeStillPath, 'w500');
+  }
+  if (series.poster_path) {
+    return getTVImageUrl(series.poster_path, 'w500');
+  }
+  if (series.backdrop_path) {
+    return getTVImageUrl(series.backdrop_path, 'w500');
+  }
+  return '/placeholder.svg';
+}
+
 export async function generateMetadata({ params }: MoviePageProps): Promise<Metadata> {
   const { slug } = await params;
 
@@ -341,10 +355,20 @@ export default async function MoviePage({ params }: MoviePageProps) {
                   <Link
                     key={season.season_number}
                     href={`/${slug}/season-${season.season_number}`}
-                    className="bg-gray-800 rounded-lg p-6 hover:bg-gray-750 hover:ring-2 hover:ring-purple-500 transition-all duration-200 group"
+                    className="group block overflow-hidden rounded-lg border border-gray-700/70 bg-gray-800/70 transition-all duration-200 hover:border-purple-500/70 hover:ring-1 hover:ring-purple-500/50"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
+                    <div className="flex flex-col md:flex-row">
+                      <div className="relative h-44 w-full overflow-hidden bg-gray-700 md:h-48 md:w-72 md:flex-shrink-0">
+                        <Image
+                          src={getSeasonThumbnailSrc(season, series)}
+                          alt={`${series.name} Season ${season.season_number}`}
+                          fill
+                          className="object-cover object-top transition-transform duration-300 group-hover:scale-105"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/45 via-black/10 to-transparent" />
+                      </div>
+                      <div className="flex flex-1 items-center justify-between p-6">
+                      <div>
                         <h3 className="text-xl font-semibold text-white mb-2 group-hover:text-purple-400 transition-colors">
                           Season {season.season_number}
                         </h3>
@@ -356,6 +380,7 @@ export default async function MoviePage({ params }: MoviePageProps) {
                         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
+                      </div>
                       </div>
                     </div>
                   </Link>

@@ -7,33 +7,71 @@ import { getMoviesByImdbIds } from "@/api/tmdb";
 import type { Movie } from "@/api/tmdb";
 import { generateMovieUrl } from "@/lib/slug";
 import Head from "next/head";
+import { resolvePosterUrl } from "@/lib/poster";
 
 export default function MoviesPage() {
   const [movies, setMovies] = useState<Movie[]>([]);
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const CHUNK_SIZE = 100;
 
   useEffect(() => {
-    loadMovies();
+    void loadInitialMovies();
   }, []);
 
-  const loadMovies = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/movies/list?offset=0&limit=100');
+  const fetchValidMoviesChunk = async (startOffset: number) => {
+    let attemptOffset = startOffset;
+    for (let i = 0; i < 5; i += 1) {
+      const res = await fetch(`/api/movies/list?offset=${attemptOffset}&limit=${CHUNK_SIZE}`);
       const data = await res.json();
       const movieIds = (data.imdb_ids || []) as string[];
+      const total = Number(data.total || 0);
+      const nextOffset = attemptOffset + CHUNK_SIZE;
       if (movieIds.length === 0) {
-        setMovies([]);
-        setLoading(false);
-        return;
+        return { moviesChunk: [] as Movie[], nextOffset, total };
       }
       const moviesData = await getMoviesByImdbIds(movieIds);
-      setMovies(moviesData);
+      if (moviesData.length > 0) {
+        return { moviesChunk: moviesData, nextOffset, total };
+      }
+      // Empty mapped chunk: move to next chunk until we find valid data.
+      attemptOffset = nextOffset;
+    }
+    return { moviesChunk: [] as Movie[], nextOffset: startOffset + CHUNK_SIZE, total: 0 };
+  };
+
+  const loadInitialMovies = async () => {
+    setLoading(true);
+    try {
+      const { moviesChunk, nextOffset, total } = await fetchValidMoviesChunk(0);
+      setMovies(moviesChunk);
+      setOffset(nextOffset);
+      setHasMore(nextOffset < total);
     } catch (error) {
-      console.error('Error loading movies:', error);
+      console.error("Error loading initial movies:", error);
+      setMovies([]);
     }
     setLoading(false);
+  };
+
+  const loadMoreMovies = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const { moviesChunk, nextOffset, total } = await fetchValidMoviesChunk(offset);
+      setMovies((prev) => {
+        const seen = new Set(prev.map((m) => m.imdb_id));
+        const uniqueNew = moviesChunk.filter((m) => !seen.has(m.imdb_id));
+        return [...prev, ...uniqueNew];
+      });
+      setOffset(nextOffset);
+      setHasMore(nextOffset < total);
+    } catch (error) {
+      console.error("Error loading more movies:", error);
+    }
+    setLoadingMore(false);
   };
 
   return (
@@ -69,14 +107,10 @@ export default function MoviesPage() {
               >
                 <div className="relative aspect-[2/3] bg-gray-800 rounded overflow-hidden shadow-lg group-hover:shadow-2xl transition-all duration-300">
                   <Image
-                    src={`https://image.tmdb.org/t/p/w500${movie.poster_path}`}
+                    src={resolvePosterUrl(movie.poster_path, "w500")}
                     alt={movie.title}
                     fill
                     className="object-cover group-hover:scale-105 transition-transform duration-300"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      target.src = '/placeholder.svg';
-                    }}
                   />
                   
                   <div className="absolute top-0.5 right-0.5 bg-yellow-500 text-black text-xs font-bold px-1 py-0.5 rounded">
@@ -97,6 +131,21 @@ export default function MoviesPage() {
                 </h3>
               </Link>
             ))}
+          </div>
+        )}
+        {!loading && (
+          <div className="text-center mt-8">
+            {hasMore ? (
+              <button
+                onClick={loadMoreMovies}
+                disabled={loadingMore}
+                className="bg-[#3fae2a] hover:bg-[#35a024] disabled:opacity-60 text-white font-semibold px-6 py-3 rounded"
+              >
+                {loadingMore ? "Loading..." : "Load More Movies"}
+              </button>
+            ) : (
+              <p className="text-gray-400 text-sm">No more movies to load</p>
+            )}
           </div>
         )}
       </div>

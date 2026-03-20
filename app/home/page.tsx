@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getMoviesByImdbIds } from "@/api/tmdb";
 // REMOVED: import { BULK_MOVIE_IDS } from "@/data/bulkMovieIds"; // 1.4MB - Now lazy loaded
 // REMOVED: import { TV_SERIES_STATIC } from "@/data/tvSeriesStatic"; // 61MB - Now lazy loaded
@@ -12,6 +12,15 @@ import type { Movie } from "@/api/tmdb";
 import { generateMovieUrl } from "@/lib/slug";
 import { getTVImageUrl } from "@/api/tmdb-tv";
 import SiteLogo from "@/components/SiteLogo";
+import { resolvePosterUrl } from "@/lib/poster";
+
+const jsonCache = new Map<string, Promise<any>>();
+const fetchJsonCached = (url: string) => {
+  if (!jsonCache.has(url)) {
+    jsonCache.set(url, fetch(url).then((res) => res.json()));
+  }
+  return jsonCache.get(url)!;
+};
 
 // TV Search Modal Component
 function TVSearchModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
@@ -326,6 +335,7 @@ export default function HomePage() {
   const [allMovies, setAllMovies] = useState<Movie[]>([]);
   const [movieDisplayCount, setMovieDisplayCount] = useState(14); // Load 14 movies at a time
   const [latestMovies, setLatestMovies] = useState<Movie[]>([]);
+  const [topRatedMovies, setTopRatedMovies] = useState<Movie[]>([]);
   const [latestTvSeries, setLatestTvSeries] = useState<any[]>([]);
   const [popularTvSeries, setPopularTvSeries] = useState<any[]>([]);
   const [featuredTvSeries, setFeaturedTvSeries] = useState<any[]>([]);
@@ -340,6 +350,7 @@ export default function HomePage() {
   
   // TV Search Modal state
   const [isTVSearchOpen, setIsTVSearchOpen] = useState(false);
+  const initialDataLoadedRef = useRef(false);
   
   // Load saved mode from localStorage on mount (ONLY if explicitly set)
   useEffect(() => {
@@ -373,13 +384,7 @@ export default function HomePage() {
 
   const categoryConfig = currentMode === 'movies' ? movieCategoryConfig : tvCategoryConfig;
 
-  useEffect(() => {
-    loadAllCategories();
-    
-    // Auto-refresh disabled for better performance
-    // const interval = setInterval(loadAllCategories, 60000);
-    // return () => clearInterval(interval);
-  }, []);
+  // Avoid heavy full-category boot load on first paint.
 
   // Keep homepage sections to exactly 2 rows like reference site.
   // We approximate columns by viewport width.
@@ -401,115 +406,75 @@ export default function HomePage() {
 
   // Load "Latest Movies" and "Latest TV-Series" sections like reference site
   useEffect(() => {
+    if (initialDataLoadedRef.current) return;
+    initialDataLoadedRef.current = true;
     (async () => {
-      // 1) Try to match reference site's Suggestions + Latest Movies by their titles.
-      // If this fails, we just fall back to our own data below.
       try {
-        const refRes = await fetch(`/api/reference/home-mapped`);
-        const refData = await refRes.json();
-        if (refRes.ok) {
-          const suggestionsIds = (refData.suggestionsImdbIds || []) as string[];
-          const latestIds = (refData.latestMoviesImdbIds || []) as string[];
+        // Category-by-category loading: render Suggestions first for faster first paint.
+        const mappedData = await fetchJsonCached(`/api/reference/home-mapped`).catch(() => null);
+        const fallbackSuggestionsData = await fetchJsonCached(`/api/movies/latest?category=suggestions&limit=${DISPLAY_COUNT}`);
 
-          // Map "Suggestions" titles -> our movies
-          if (suggestionsIds.length) {
-            const mappedSuggestions = await getMoviesByImdbIds(suggestionsIds);
-            if (mappedSuggestions.length) {
-              // If less than DISPLAY_COUNT, top-up from our own Suggestions API
-              let finalSuggestions = mappedSuggestions.slice(0, DISPLAY_COUNT);
-              if (finalSuggestions.length < DISPLAY_COUNT) {
-                try {
-                  const moreRes = await fetch(
-                    `/api/movies/latest?category=suggestions&limit=${DISPLAY_COUNT}`
-                  );
-                  const moreData = await moreRes.json();
-                  if (moreRes.ok && Array.isArray(moreData.movies)) {
-                    for (const m of moreData.movies) {
-                      if (
-                        finalSuggestions.length >= DISPLAY_COUNT ||
-                        finalSuggestions.some((x) => x.imdb_id === m.imdb_id)
-                      ) {
-                        continue;
-                      }
-                      finalSuggestions.push(m);
-                    }
-                  }
-                } catch {
-                  // ignore top-up errors
-                }
-              }
-              setAllMovies(finalSuggestions);
-              setCategories((prev) => ({ ...prev, Suggestions: finalSuggestions }));
-            }
-          }
+        const suggestionsIds = (mappedData?.suggestionsImdbIds || []) as string[];
+        const latestIds = (mappedData?.latestMoviesImdbIds || []) as string[];
+        const suggestionsFromStore = suggestionsIds.length
+          ? (await getMoviesByImdbIds(suggestionsIds)).slice(0, DISPLAY_COUNT)
+          : [];
 
-          // Map "Latest Movies" titles -> our movies
-          if (latestIds.length) {
-            const mappedLatest = await getMoviesByImdbIds(latestIds);
-            if (mappedLatest.length) {
-              let finalLatest = mappedLatest.slice(0, DISPLAY_COUNT);
-              if (finalLatest.length < DISPLAY_COUNT) {
-                try {
-                  const moreRes = await fetch(
-                    `/api/movies/latest?category=latest&limit=${DISPLAY_COUNT}`
-                  );
-                  const moreData = await moreRes.json();
-                  if (moreRes.ok && Array.isArray(moreData.movies)) {
-                    for (const m of moreData.movies) {
-                      if (
-                        finalLatest.length >= DISPLAY_COUNT ||
-                        finalLatest.some((x) => x.imdb_id === m.imdb_id)
-                      ) {
-                        continue;
-                      }
-                      finalLatest.push(m);
-                    }
-                  }
-                } catch {
-                  // ignore
-                }
-              }
-              setLatestMovies(finalLatest);
-            }
-          }
+        const finalSuggestions =
+          suggestionsFromStore.length > 0
+            ? suggestionsFromStore
+            : (Array.isArray(fallbackSuggestionsData.movies) ? fallbackSuggestionsData.movies : []);
+
+        setAllMovies(finalSuggestions);
+        setCategories((prev) => ({ ...prev, Suggestions: finalSuggestions }));
+        setLoading(false);
+
+        // Load next categories progressively in background.
+        const latestFromStore = latestIds.length
+          ? (await getMoviesByImdbIds(latestIds)).slice(0, DISPLAY_COUNT)
+          : [];
+        if (latestFromStore.length > 0) {
+          setLatestMovies(latestFromStore);
+        } else {
+          const fallbackLatestData = await fetchJsonCached(`/api/movies/latest?category=latest&limit=${DISPLAY_COUNT}`);
+          setLatestMovies(Array.isArray(fallbackLatestData.movies) ? fallbackLatestData.movies : []);
         }
-      } catch {}
 
+        const fallbackTopRatedData = await fetchJsonCached(`/api/movies/latest?category=top_rated&limit=${DISPLAY_COUNT}`);
+        setTopRatedMovies(Array.isArray(fallbackTopRatedData.movies) ? fallbackTopRatedData.movies : []);
+      } catch {}
+      setLoading(false);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (currentMode !== "tv") return;
+    if (
+      latestTvSeries.length > 0 &&
+      popularTvSeries.length > 0 &&
+      featuredTvSeries.length > 0
+    ) return;
+
+    (async () => {
       try {
-        // Fetch more than we render (we render exactly 2 rows)
-        const latestRes = await fetch(`/api/movies/latest?category=latest&limit=${DISPLAY_COUNT}`);
-        const latestData = await latestRes.json();
-        if (latestRes.ok && Array.isArray(latestData.movies)) {
-          // Only overwrite if we didn't already map from reference
-          setLatestMovies((prev) => (prev?.length ? prev : latestData.movies));
+        const [latestTvData, popularTvData, featuredTvData] = await Promise.all([
+          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=first_air_date&sortOrder=desc`),
+          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=vote_average&sortOrder=desc&minRating=7.0`),
+          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=vote_average&sortOrder=desc&minRating=8.0`),
+        ]);
+
+        if (latestTvData?.success && Array.isArray(latestTvData.data)) {
+          setLatestTvSeries(latestTvData.data);
         }
-      } catch {}
-
-      try {
-        const tvRes = await fetch(`/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=first_air_date&sortOrder=desc`);
-        const tvData = await tvRes.json();
-        if (tvRes.ok && tvData?.success && Array.isArray(tvData.data)) {
-          setLatestTvSeries(tvData.data);
+        if (popularTvData?.success && Array.isArray(popularTvData.data)) {
+          setPopularTvSeries(popularTvData.data);
         }
-      } catch {}
-
-      try {
-        const tvRes = await fetch(`/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=vote_average&sortOrder=desc&minRating=7.0`);
-        const tvData = await tvRes.json();
-        if (tvRes.ok && tvData?.success && Array.isArray(tvData.data)) {
-          setPopularTvSeries(tvData.data);
-        }
-      } catch {}
-
-      try {
-        const tvRes = await fetch(`/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=vote_average&sortOrder=desc&minRating=8.0`);
-        const tvData = await tvRes.json();
-        if (tvRes.ok && tvData?.success && Array.isArray(tvData.data)) {
-          setFeaturedTvSeries(tvData.data);
+        if (featuredTvData?.success && Array.isArray(featuredTvData.data)) {
+          setFeaturedTvSeries(featuredTvData.data);
         }
       } catch {}
     })();
-  }, []);
+  }, [currentMode]);
 
   // Mode switching functions
   const switchToMovies = () => {
@@ -772,7 +737,7 @@ export default function HomePage() {
                         <div className="bg-white rounded shadow overflow-hidden">
                           <div className="relative aspect-[2/3]">
                             <Image
-                              src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : "/placeholder.svg"}
+                              src={resolvePosterUrl(movie.poster_path, "w500")}
                               alt={movie.title}
                               fill
                               className="object-cover"
@@ -811,7 +776,7 @@ export default function HomePage() {
                       <div className="bg-white rounded shadow overflow-hidden">
                         <div className="relative aspect-[2/3]">
                           <Image
-                            src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : "/placeholder.svg"}
+                            src={resolvePosterUrl(movie.poster_path, "w500")}
                             alt={movie.title}
                             fill
                             className="object-cover"
@@ -832,51 +797,41 @@ export default function HomePage() {
                 </div>
               </section>
 
-              {/* Latest TV-Series (also visible on Movies home like reference) */}
+              {/* Top Rated */}
               <section>
                 <div className="mb-3">
                   <div className="inline-flex items-center bg-[#79c142] text-white text-base md:text-lg font-semibold px-4 py-1.5 rounded">
-                    Latest TV-Series
+                    Top Rated
                   </div>
                 </div>
                 <div className={homeGridClass}>
-                  {latestTvSeries.slice(0, DISPLAY_COUNT).map((series: any, index: number) => {
-                    const name = series.name || `TV Series ${series.imdb_id || series.tmdb_id || index}`;
-                    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-                    const href = `/${slug}-${series.tmdb_id || series.tmdbId || series.imdb_id || series.imdbId || ""}`;
-                    const eps =
-                      series?.seasons?.reduce?.((sum: number, s: any) => sum + (s?.episodes?.length || 0), 0) ||
-                      series?.episodeCount ||
-                      0;
-                    return (
-                      <Link key={`tv-latest-movies-${series.tmdb_id ?? series.imdb_id ?? index}-${index}`} href={href} className="group block">
-                        <div className="bg-white rounded shadow overflow-hidden">
-                          <div className="relative aspect-[2/3]">
-                            <Image
-                              src={series.poster_path ? getTVImageUrl(series.poster_path, "w500") : "/placeholder.svg"}
-                              alt={name}
-                              fill
-                              className="object-cover"
-                              unoptimized={true}
-                            />
-                            <span className="absolute top-2 right-2 bg-[#79c142] text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                              TV
-                            </span>
-                            {eps > 0 && (
-                              <span className="absolute top-2 left-2 bg-black/70 text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                                Eps {eps}
-                              </span>
-                            )}
-                          </div>
-                          <div className="bg-black px-2 py-2">
-                            <div className="text-white text-xs font-semibold line-clamp-1">
-                              {name}
-                            </div>
+                  {topRatedMovies.slice(0, DISPLAY_COUNT).map((movie: any, index: number) => (
+                    <Link
+                      key={`top-rated-movies-${movie.imdb_id ?? index}-${index}`}
+                      href={generateMovieUrl(movie.title, movie.imdb_id)}
+                      className="group block"
+                    >
+                      <div className="bg-white rounded shadow overflow-hidden">
+                        <div className="relative aspect-[2/3]">
+                          <Image
+                            src={resolvePosterUrl(movie.poster_path, "w500")}
+                            alt={movie.title}
+                            fill
+                            className="object-cover"
+                            unoptimized={true}
+                          />
+                          <span className="absolute top-2 right-2 bg-[#79c142] text-white text-[10px] font-bold px-2 py-0.5 rounded">
+                            HD
+                          </span>
+                        </div>
+                        <div className="bg-black px-2 py-2">
+                          <div className="text-white text-xs font-semibold line-clamp-1">
+                            {movie.title}
                           </div>
                         </div>
-                      </Link>
-                    );
-                  })}
+                      </div>
+                    </Link>
+                  ))}
                 </div>
               </section>
             </>

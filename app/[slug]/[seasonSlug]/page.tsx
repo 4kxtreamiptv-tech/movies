@@ -98,6 +98,19 @@ interface EpisodeData {
   runtime?: number;
 }
 
+function getEpisodeThumbnailSrc(episode: EpisodeData, series: { poster_path?: string | null; backdrop_path?: string | null }) {
+  if (episode.still_path) {
+    return getTVImageUrl(episode.still_path, 'w500');
+  }
+  if (series.poster_path) {
+    return getTVImageUrl(series.poster_path, 'w500');
+  }
+  if (series.backdrop_path) {
+    return getTVImageUrl(series.backdrop_path, 'w500');
+  }
+  return '/placeholder.svg';
+}
+
 export default async function SeasonPage({ params }: SeasonPageProps) {
   const { slug, seasonSlug } = await params;
   const tmdbId = extractTmdbIdFromSlug(slug);
@@ -209,19 +222,19 @@ export default async function SeasonPage({ params }: SeasonPageProps) {
             <Link
               key={episode.episode_imdb_id}
               href={`/${createEpisodeSlug(series.name, seasonNumber, episode.episode_number, episode.episode_name, episode.episode_imdb_id)}`}
-              className="block bg-gray-800 rounded-lg overflow-hidden hover:ring-2 hover:ring-purple-500 transition-all duration-200 group"
+              className="group block overflow-hidden rounded-xl border border-gray-700/70 bg-gray-800/70 transition-all duration-200 hover:border-purple-500/70 hover:ring-1 hover:ring-purple-500/50"
             >
-              <div className="flex flex-col md:flex-row gap-4 p-4">
+              <div className="flex flex-col gap-4 p-4 md:flex-row md:gap-5 md:p-5">
                 {/* Episode Thumbnail */}
-                <div className="relative w-full md:w-80 h-48 md:h-auto flex-shrink-0 bg-gray-700 rounded overflow-hidden">
+                <div className="relative h-48 w-full flex-shrink-0 overflow-hidden rounded-lg bg-gray-700 md:h-48 md:w-80">
                   <Image
-                    src={getTVImageUrl(episode.still_path, 'w500')}
+                    src={getEpisodeThumbnailSrc(episode, series)}
                     alt={`${series.name} S${seasonNumber}E${episode.episode_number}`}
                     fill
-                    className="object-cover group-hover:scale-105 transition-transform duration-200"
+                    className="object-cover object-top transition-transform duration-300 group-hover:scale-105"
                   />
                   {/* Play Button Overlay */}
-                  <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-200">
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/15 transition-all duration-200 group-hover:bg-black/35">
                     <div className="w-16 h-16 bg-purple-600 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transform scale-75 group-hover:scale-100 transition-all duration-200">
                       <svg className="w-8 h-8 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M8 5v14l11-7z"/>
@@ -243,11 +256,11 @@ export default async function SeasonPage({ params }: SeasonPageProps) {
                 {/* Episode Info */}
                 <div className="flex-1">
                   <div className="flex items-start justify-between mb-2">
-                    <h3 className="text-xl font-semibold text-white group-hover:text-purple-400 transition-colors">
+                    <h3 className="text-xl font-semibold text-white transition-colors group-hover:text-purple-400">
                       {episode.episode_number}. {episode.episode_name}
                     </h3>
                     {episode.vote_average && (
-                      <span className="text-yellow-400 text-sm ml-2">
+                      <span className="ml-2 rounded-full bg-yellow-400/15 px-2.5 py-1 text-sm text-yellow-300">
                         ⭐ {episode.vote_average.toFixed(1)}
                       </span>
                     )}
