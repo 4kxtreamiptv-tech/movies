@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import clientPromise from '@/lib/mongodb-client';
 import { getBaseUrlForBuild } from '@/lib/domain';
+import { getBatchMovieCount, getBulkSeriesCount } from '@/lib/batchMovies';
 
 const DOMAIN = getBaseUrlForBuild();
 // 50k movies / 50k series per sitemap chunk
@@ -8,27 +8,12 @@ const ITEMS_PER_SITEMAP = 50000;
 
 export async function GET() {
   try {
-    // Import latest movie list from VidSrc to calculate number of sitemaps needed
-    const { VID_SRC_LATEST_MOVIES } = await import('@/data/vidsrcLatestMovies');
-    
-    const totalMovies = VID_SRC_LATEST_MOVIES.length;
+    // Use the same datasets as the chunk routes
+    const totalMovies = getBatchMovieCount();
     const numberOfMovieSitemaps = Math.ceil(totalMovies / ITEMS_PER_SITEMAP);
-    
-    // Get total series count from MongoDB
-    let totalSeries = 0;
-    let numberOfSeriesSitemaps = 0;
-    
-    try {
-      const client = await clientPromise;
-      if (client) {
-      const db = client.db('moviesDB');
-      const seriesCollection = db.collection('tvSeries');
-      totalSeries = await seriesCollection.countDocuments();
-      numberOfSeriesSitemaps = Math.ceil(totalSeries / ITEMS_PER_SITEMAP);
-      }
-    } catch (error) {
-      console.error('Error fetching series count:', error);
-    }
+
+    const totalSeries = getBulkSeriesCount();
+    const numberOfSeriesSitemaps = Math.ceil(totalSeries / ITEMS_PER_SITEMAP);
     
     const lastmod = new Date().toISOString();
     

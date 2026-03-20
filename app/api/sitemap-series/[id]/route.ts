@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getBaseUrlForBuild } from '@/lib/domain';
-import { TV_SERIES_IDS } from '@/data/tvSeriesIds';
+import { getSeriesImdbIds } from '@/lib/batchMovies';
 
 const DOMAIN = getBaseUrlForBuild();
-const SERIES_PER_SITEMAP = 1000; // 1k per sitemap batch
+// Use the same chunk size as movies sitemaps so the sitemap index stays consistent
+const SERIES_PER_SITEMAP = 50000;
 
 const TMDB_API_KEY = 'b31d2e5f33b74ffa7b3b483ff353f760';
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
@@ -29,7 +30,8 @@ export async function GET(
       return new NextResponse('Invalid sitemap number', { status: 400 });
     }
 
-    const totalSeries = TV_SERIES_IDS.length;
+    const allSeriesIds = getSeriesImdbIds();
+    const totalSeries = allSeriesIds.length;
     const startIndex = (sitemapNumber - 1) * SERIES_PER_SITEMAP;
     const endIndex = Math.min(startIndex + SERIES_PER_SITEMAP, totalSeries);
 
@@ -37,7 +39,7 @@ export async function GET(
       return new NextResponse('Sitemap not found', { status: 404 });
     }
 
-    const seriesIdsChunk = TV_SERIES_IDS.slice(startIndex, endIndex);
+    const seriesIdsChunk = allSeriesIds.slice(startIndex, endIndex);
     console.log(`Generating series sitemap ${sitemapNumber}: Series ${startIndex}-${endIndex} (${seriesIdsChunk.length} series)`);
 
     const lastmod = new Date().toISOString();

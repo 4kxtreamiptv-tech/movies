@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateMovieUrl } from '@/lib/slug';
-import { getMovieByImdbId } from '@/api/tmdb';
 import { getBaseUrlForBuild } from '@/lib/domain';
+import { getBatchMovieCount, getBatchMovieItemsSlice } from '@/lib/batchMovies';
 
 const DOMAIN = getBaseUrlForBuild();
 // User request: 50k movies per sitemap chunk
@@ -19,10 +19,7 @@ export async function GET(
       return new NextResponse('Invalid sitemap number', { status: 400 });
     }
 
-    // Import latest movie list from VidSrc feed
-    const { VID_SRC_LATEST_MOVIES } = await import('@/data/vidsrcLatestMovies');
-    
-    const totalMovies = VID_SRC_LATEST_MOVIES.length;
+    const totalMovies = getBatchMovieCount();
     
     // Calculate start and end indices for this sitemap
     const startIndex = (sitemapNumber - 1) * MOVIES_PER_SITEMAP;
@@ -34,55 +31,28 @@ export async function GET(
     }
     
     // Get movie IDs for this chunk
-    const movieIdsChunk = VID_SRC_LATEST_MOVIES.slice(startIndex, endIndex)
-      .map((m) => m.imdb_id)
-      .filter((id) => !!id && id.trim() !== '');
+    const movieChunk = getBatchMovieItemsSlice(startIndex, endIndex - startIndex);
     
-    console.log(`Generating sitemap ${sitemapNumber}: Movies ${startIndex}-${endIndex} (${movieIdsChunk.length} movies)`);
+    console.log(`Generating sitemap ${sitemapNumber}: Movies ${startIndex}-${endIndex} (${movieChunk.length} movies)`);
     
     // Generate sitemap XML directly from movie IDs (without TMDB API call for speed)
     const lastmod = new Date().toISOString();
     
-    // Generate sitemap XML with actual movie URLs (title-slug format)
-    const urlEntries = await Promise.all(
-      movieIdsChunk
-        .filter(imdbId => imdbId && imdbId.trim() !== '')
-        .map(async (imdbId) => {
-          try {
-            // Get movie details to generate proper URL
-            const movie = await getMovieByImdbId(imdbId);
-            if (movie && movie.title) {
-              // Generate URL using the same logic as movie pages
-              const url = generateMovieUrl(movie.title, movie.imdb_id);
-              return `  <url>
+    // Generate sitemap XML with actual movie URLs (title-slug format), without TMDB calls.
+    const urlEntriesString = movieChunk
+      .map(({ imdb_id, title }) => {
+        const safeImdb = (imdb_id || '').trim();
+        if (!safeImdb) return '';
+        const url = title ? generateMovieUrl(title, safeImdb) : `/${safeImdb}`;
+        return `  <url>
     <loc>${DOMAIN}${url}</loc>
     <lastmod>${lastmod}</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>`;
-            } else {
-              // Fallback to IMDB ID format if movie not found
-              return `  <url>
-    <loc>${DOMAIN}/${imdbId}</loc>
-    <lastmod>${lastmod}</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
-  </url>`;
-            }
-          } catch (error) {
-            console.error(`Error processing movie ${imdbId}:`, error);
-            // Fallback to IMDB ID format
-            return `  <url>
-    <loc>${DOMAIN}/${imdbId}</loc>
-    <lastmod>${lastmod}</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
-  </url>`;
-          }
-        })
-    );
-    
-    const urlEntriesString = urlEntries.join('\n');
+      })
+      .filter(Boolean)
+      .join('\n');
     
     const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

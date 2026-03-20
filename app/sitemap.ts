@@ -1,8 +1,9 @@
 import { MetadataRoute } from "next";
 import { getBaseUrlForBuild } from "@/lib/domain";
+import { getBatchMovieCount, getBulkSeriesCount } from "@/lib/batchMovies";
 
 const DOMAIN = getBaseUrlForBuild();
-const ITEMS_PER_SITEMAP = 1000;
+const ITEMS_PER_SITEMAP = 50000;
 
 /**
  * Root /sitemap.xml
@@ -17,25 +18,12 @@ const ITEMS_PER_SITEMAP = 1000;
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
 
-  // Count movie sitemaps from vidsrc list
-  const { VID_SRC_LATEST_MOVIES } = await import("@/data/vidsrcLatestMovies");
-  const totalMovies = VID_SRC_LATEST_MOVIES.length;
+  // Count movie + TV-series sitemaps from the same bulk datasets used by chunk routes
+  const totalMovies = getBatchMovieCount();
   const numberOfMovieSitemaps = Math.ceil(totalMovies / ITEMS_PER_SITEMAP);
 
-  // Count TV-series sitemaps from MongoDB (if available)
-  let numberOfSeriesSitemaps = 0;
-  try {
-    const clientPromise = (await import("@/lib/mongodb-client")).default;
-    const client = await clientPromise;
-    if (client) {
-      const db = client.db("moviesDB");
-      const seriesCollection = db.collection("tvSeries");
-      const totalSeries = await seriesCollection.countDocuments();
-      numberOfSeriesSitemaps = Math.ceil(totalSeries / ITEMS_PER_SITEMAP);
-    }
-  } catch {
-    // ignore DB failure; fall back to zero series sitemaps
-  }
+  const totalSeries = getBulkSeriesCount();
+  const numberOfSeriesSitemaps = Math.ceil(totalSeries / ITEMS_PER_SITEMAP);
 
   const entries: MetadataRoute.Sitemap = [
     // Core sitemap XML endpoints
