@@ -84,7 +84,7 @@ export default function KeywordLandingPage({ keyword, title, description, colorT
             {keyword.toUpperCase()}
           </h1>
           <p className="text-xl text-gray-600 mb-8">
-            {description}
+            {description} - curated picks, fast discovery, and smooth playback in one place.
           </p>
           
           {/* Search Bar */}
@@ -124,7 +124,7 @@ export default function KeywordLandingPage({ keyword, title, description, colorT
             onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colorTheme.buttonHover}
             onMouseLeave={(e) => e.currentTarget.style.backgroundColor = colorTheme.accent}
           >
-            Browse Full Collection
+            Explore Full Library
           </Link>
         </div>
 
@@ -215,7 +215,7 @@ export default function KeywordLandingPage({ keyword, title, description, colorT
         {/* Genre List */}
         <div className="mb-12">
           <p className="text-gray-700 text-lg leading-relaxed">
-            Action, Adventure, Animation, Biography, Comedy, Crime, Documentary, Drama, Family, Fantasy, Game show, History, Horror, Musical, Mystery, News, Reality, Romance, Sci-Fi, TV Movie, Thriller, War
+            Explore popular categories including Action, Adventure, Animation, Biography, Comedy, Crime, Documentary, Drama, Family, Fantasy, History, Horror, Mystery, Reality, Romance, Sci-Fi, Thriller, and more.
           </p>
         </div>
 
@@ -261,8 +261,8 @@ export default function KeywordLandingPage({ keyword, title, description, colorT
                 </div>
               </div>
               <p className="text-gray-400 text-sm">
-                Stream premium entertainment content online. 
-                High-definition quality with instant access.
+                Browse a large catalog of movies and series with a cleaner experience,
+                better search, and faster discovery across genres.
               </p>
             </div>
 
@@ -292,7 +292,7 @@ export default function KeywordLandingPage({ keyword, title, description, colorT
           <div className="border-t border-gray-700 mt-8 pt-8">
             <div className="text-center">
               <div className="text-gray-500 text-sm">
-                Premium streaming platform for entertainment enthusiasts
+                Updated daily for viewers who want simple and reliable entertainment discovery.
               </div>
             </div>
           </div>

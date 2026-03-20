@@ -231,28 +231,50 @@ export async function getEpisodesByImdbIds(imdbIds: string[]): Promise<Episode[]
 }
 
 // Helper function to get image URL
-export function getTVImageUrl(path: string | null | undefined, size: 'w92' | 'w154' | 'w185' | 'w342' | 'w500' | 'w780' | 'original' = 'w500'): string {
-  if (!path || path.trim() === '') {
-    return '/placeholder.svg';
-  }
-  const normalizedPath = path.trim();
+function extractTmdbPath(rawPath: string): string | null {
+  const normalizedPath = rawPath.trim();
+  if (!normalizedPath) return null;
 
-  // Already a complete URL
-  if (/^https?:\/\//i.test(normalizedPath)) {
+  // Already TMDB-style image path (e.g. /abc123.jpg)
+  if (normalizedPath.startsWith('/')) {
     return normalizedPath;
   }
 
-  // Protocol-relative URL: //image.tmdb.org/...
-  if (normalizedPath.startsWith('//')) {
-    return `https:${normalizedPath}`;
-  }
-
-  // Host-only URL without protocol: image.tmdb.org/...
+  // Full/protocol-relative/host-only URL: extract the file path segment
+  // from /t/p/<size>/<path> when possible.
+  let urlToParse = normalizedPath;
+  if (normalizedPath.startsWith('//')) urlToParse = `https:${normalizedPath}`;
   if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(normalizedPath)) {
-    return `https://${normalizedPath}`;
+    urlToParse = `https://${normalizedPath}`;
   }
 
-  const tmdbPath = normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`;
+  if (/^https?:\/\//i.test(urlToParse)) {
+    try {
+      const parsed = new URL(urlToParse);
+      const marker = '/t/p/';
+      const markerIndex = parsed.pathname.indexOf(marker);
+      if (markerIndex >= 0) {
+        const afterMarker = parsed.pathname.slice(markerIndex + marker.length); // w500/abc.jpg
+        const parts = afterMarker.split('/').filter(Boolean);
+        if (parts.length >= 2) {
+          return `/${parts.slice(1).join('/')}`;
+        }
+      }
+      // Last fallback for full URLs: keep pathname as potential TMDB path.
+      return parsed.pathname.startsWith('/') ? parsed.pathname : `/${parsed.pathname}`;
+    } catch {
+      return null;
+    }
+  }
+
+  // Plain filename/path without leading slash
+  return `/${normalizedPath.replace(/^\/+/, '')}`;
+}
+
+export function getTVImageUrl(path: string | null | undefined, size: 'w92' | 'w154' | 'w185' | 'w342' | 'w500' | 'w780' | 'original' = 'w500'): string {
+  if (!path || path.trim() === '') return '/placeholder.svg';
+  const tmdbPath = extractTmdbPath(path);
+  if (!tmdbPath) return '/placeholder.svg';
   return `https://image.tmdb.org/t/p/${size}${tmdbPath}`;
 }
 

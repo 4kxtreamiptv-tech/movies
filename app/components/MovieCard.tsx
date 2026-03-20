@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { generateMovieUrl } from "@/lib/slug";
+import { resolvePosterUrl } from "@/lib/poster";
 
 interface MovieCardProps {
   movie: {
@@ -28,7 +29,7 @@ export default function MovieCard({ movie, index }: MovieCardProps) {
     >
       <div className="relative aspect-[2/3] bg-gray-800 rounded overflow-hidden shadow-lg group-hover:shadow-2xl transition-all duration-300">
         <Image
-          src={movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : '/placeholder.svg'}
+          src={resolvePosterUrl(movie.poster_path, "w500")}
           alt={`${movie.title} movie poster`}
           fill
           className="object-cover group-hover:scale-105 transition-transform duration-300"
