@@ -69,7 +69,7 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <PreloadResources />
-        <meta name="google-site-verification" content="LkIdYmIX984qNib8gCblASZXLkLSuPkNjT3G6byXf2Q" />
+        <meta name="google-site-verification" content="NrSs2RXiVZSZ4WirpRXDb5h7qywNOqY1Le-f6JC8FoM" />
         <meta name="msvalidate.01" content="CA9C80743C5C403924230A48CF321E7C" />
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
         <link rel="shortcut icon" href="/favicon.svg" />
