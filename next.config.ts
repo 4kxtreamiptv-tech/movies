@@ -2,10 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   images: {
-    // Custom loader returns src unchanged → no /_next/image proxy, no Vercel image optimization quota.
-    // Posters use simple TMDB URLs; limit only applies if you switch back to default loader.
-    loader: "custom",
-    loaderFile: "./imageLoader.ts",
+    // Always use the exact src URL in the browser — no /_next/image proxy, no Vercel image optimization quota.
+    unoptimized: true,
     remotePatterns: [
       {
         protocol: 'https',
@@ -27,9 +25,8 @@ const nextConfig: NextConfig = {
   compress: true,
   poweredByHeader: false,
   generateEtags: false,
-  // Performance optimizations
+  // Performance optimizations (optimizeCss removed — needs `critters` and breaks build if missing)
   experimental: {
-    optimizeCss: true,
     optimizePackageImports: ['@/components', '@/lib'],
   },
   // Environment variables
