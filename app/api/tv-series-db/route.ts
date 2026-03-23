@@ -1,160 +1,143 @@
-// API Route: Fetch TV Series from MongoDB, fallback to TMDB when DB empty/unavailable
 import { NextRequest, NextResponse } from 'next/server';
-import clientPromise from '@/lib/mongodb-client';
-
-const TMDB_API_KEY = 'b31d2e5f33b74ffa7b3b483ff353f760';
-const TMDB_BASE = 'https://api.themoviedb.org/3';
+import { flushSeriesStore, getAllSeriesIds, getSeriesMeta } from '@/lib/tvSeriesStore';
 
 export const dynamic = 'force-dynamic';
 
-/** Fetch TV from TMDB and map to same shape as MongoDB docs (for fallback). Sorted by latest first in category. */
-async function fetchFromTMDB(
-  limit: number,
-  skip: number,
-  sortBy: string,
-  sortOrder: number
-): Promise<{ data: any[]; total: number }> {
-  const pages = [1, 2, 3];
-  const allResults: any[] = [];
-  for (const page of pages) {
-    const res = await fetch(
-      `${TMDB_BASE}/tv/popular?api_key=${TMDB_API_KEY}&page=${page}&language=en-US`
-    );
-    if (!res.ok) continue;
-    const json = await res.json();
-    const results = json.results || [];
-    allResults.push(...results);
-  }
-  const mapped = allResults.map((r: any) => {
-    const numEps = r.number_of_episodes ?? 0;
-    return {
-      imdb_id: null as string | null,
-      tmdb_id: r.id,
-      name: r.name || `TV Series ${r.id}`,
-      overview: r.overview || '',
-      poster_path: r.poster_path || null,
-      backdrop_path: r.backdrop_path || null,
-      first_air_date: r.first_air_date || null,
-      vote_average: r.vote_average ?? 0,
-      number_of_seasons: r.number_of_seasons ?? 0,
-      number_of_episodes: numEps,
-      seasons: numEps > 0 ? [{ episodes: Array(numEps) }] : [],
-    };
-  });
-  // Dedupe by tmdb_id
-  const byId = new Map<number, any>();
-  mapped.forEach((m) => byId.set(m.tmdb_id, m));
-  const unique = Array.from(byId.values());
-  // Sort by category: latest first (first_air_date desc) or rating (vote_average desc)
-  const desc = sortOrder === -1;
-  unique.sort((a: any, b: any) => {
-    if (sortBy === 'vote_average') {
-      const va = a.vote_average ?? 0;
-      const vb = b.vote_average ?? 0;
-      return desc ? vb - va : va - vb;
-    }
-    const da = a.first_air_date || '';
-    const db = b.first_air_date || '';
-    if (da !== db) return desc ? db.localeCompare(da) : da.localeCompare(db);
-    return 0;
-  });
-  const total = Math.min(unique.length, 500);
-  const slice = unique.slice(skip, skip + limit);
-  return { data: slice, total };
+function imdbNumericValue(imdbId: string): number {
+  const m = imdbId.match(/^tt(\d+)$/i);
+  return m ? Number(m[1]) : 0;
 }
+
+const GENRE_TO_TMDB_IDS: Record<string, number[]> = {
+  action: [10759],
+  drama: [18],
+  comedy: [35],
+  'sci-fi': [10765],
+  scifi: [10765],
+  horror: [9648], // TV has no strict horror id; closest discovery bucket
+  thriller: [80, 9648, 10759],
+  romance: [10749],
+  mystery: [9648],
+  fantasy: [10765],
+  crime: [80],
+  adventure: [10759],
+  family: [10751],
+  documentary: [99],
+  animation: [16],
+  reality: [10764],
+};
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
-  const limit = parseInt(searchParams.get('limit') || '100');
-  const skip = parseInt(searchParams.get('skip') || '0');
+  const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '20', 10)));
+  const skip = Math.max(0, parseInt(searchParams.get('skip') || '0', 10));
   const sortBy = searchParams.get('sortBy') || 'first_air_date';
   const sortOrder = searchParams.get('sortOrder') === 'asc' ? 1 : -1;
+  const enrich = searchParams.get('enrich') === '1';
 
   const minRating = parseFloat(searchParams.get('minRating') || '0');
   const maxRating = parseFloat(searchParams.get('maxRating') || '10');
-  const minYear = parseInt(searchParams.get('minYear') || '1900');
-  const maxYear = parseInt(searchParams.get('maxYear') || '2030');
-  const genre = searchParams.get('genre');
-  const category = searchParams.get('category');
-  const year = parseInt(searchParams.get('year') || '0');
+  const minYear = parseInt(searchParams.get('minYear') || '1900', 10);
+  const maxYear = parseInt(searchParams.get('maxYear') || '2030', 10);
+  const year = parseInt(searchParams.get('year') || '0', 10);
+  const genre = (searchParams.get('genre') || '').trim().toLowerCase();
 
   try {
-    const client = await clientPromise;
-    if (!client) {
-      const fallback = await fetchFromTMDB(limit, skip, sortBy, sortOrder);
+    const orderedIds = [...getAllSeriesIds()].sort((a, b) => {
+      const diff = imdbNumericValue(b) - imdbNumericValue(a);
+      return sortOrder === 1 ? -diff : diff;
+    });
+
+    const needsStrictFilters =
+      year > 0 ||
+      minYear > 1900 ||
+      maxYear < 2030 ||
+      genre.length > 0 ||
+      minRating > 0 ||
+      maxRating < 10;
+
+    const targetGenreIds = genre ? GENRE_TO_TMDB_IDS[genre] || [] : [];
+
+    // Fast path: no strict filters, just paginated latest list.
+    if (!needsStrictFilters) {
+      const total = orderedIds.length;
+      const sliceIds = orderedIds.slice(skip, skip + limit);
+      const data = enrich
+        ? await Promise.all(sliceIds.map((id) => getSeriesMeta(id, true)))
+        : await Promise.all(sliceIds.map((id) => getSeriesMeta(id, false)));
+      flushSeriesStore();
       return NextResponse.json({
         success: true,
-        data: fallback.data,
-        total: fallback.total,
+        data,
+        total,
         limit,
-        skip
-      });
-    }
-    const db = client.db('moviesDB');
-    const collection = db.collection('tvSeries');
-
-    const query: any = {
-      name: { $exists: true, $ne: null },
-      vote_average: { $gte: minRating, $lte: maxRating }
-    };
-
-    if (year > 0) {
-      const start = `${year}-01-01`;
-      const end = `${year}-12-31`;
-      query.first_air_date = { $gte: start, $lte: end };
-    } else {
-      query.first_air_date = {
-        $gte: `${minYear}-01-01`,
-        $lte: `${maxYear}-12-31`
-      };
-    }
-    if (genre) query.genres = genre;
-    if (category) query.categories = category;
-
-    const total = await collection.countDocuments(query);
-    if (total === 0) {
-      const fallback = await fetchFromTMDB(limit, skip, sortBy, sortOrder);
-      return NextResponse.json({
-        success: true,
-        data: fallback.data,
-        total: fallback.total,
-        limit,
-        skip
+        skip,
+        source: 'tvSeriesIds',
+        sortBy,
       });
     }
 
-    const series = await collection
-      .find(query)
-      .sort({ [sortBy]: sortOrder, random_order: 1 })
-      .skip(skip)
-      .limit(limit)
-      .toArray();
+    const matched: any[] = [];
+    const required = skip + limit + 1; // enough to detect hasMore in filtered mode
+
+    for (const imdbId of orderedIds) {
+      const meta = await getSeriesMeta(imdbId, enrich || needsStrictFilters);
+      const firstYear =
+        typeof meta.first_air_date === 'string' && meta.first_air_date.length >= 4
+          ? parseInt(meta.first_air_date.slice(0, 4), 10)
+          : 0;
+      const rating = Number(meta.vote_average || 0);
+
+      if (needsStrictFilters) {
+        if (rating < minRating || rating > maxRating) continue;
+        if (year > 0) {
+          if (!firstYear || firstYear !== year) continue;
+        } else if (firstYear) {
+          if (firstYear < minYear || firstYear > maxYear) continue;
+        }
+        if (targetGenreIds.length > 0) {
+          const ids = Array.isArray(meta.genre_ids) ? meta.genre_ids : [];
+          if (!ids.some((id: number) => targetGenreIds.includes(id))) continue;
+        }
+      }
+
+      matched.push(meta);
+      if (needsStrictFilters && matched.length >= required) break;
+    }
+
+    // Latest-first by date, then rating, then imdb number
+    matched.sort((a, b) => {
+      const da = a.first_air_date || '';
+      const db = b.first_air_date || '';
+      if (da !== db) return db.localeCompare(da);
+      const vr = Number(b.vote_average || 0) - Number(a.vote_average || 0);
+      if (vr !== 0) return vr;
+      return imdbNumericValue(b.imdb_id) - imdbNumericValue(a.imdb_id);
+    });
+
+    const pageItems = matched.slice(skip, skip + limit);
+    const hasMoreFiltered = needsStrictFilters ? matched.length > skip + limit : skip + limit < matched.length;
+    const total = needsStrictFilters
+      ? skip + pageItems.length + (hasMoreFiltered ? 1 : 0)
+      : matched.length;
+
+    flushSeriesStore();
 
     return NextResponse.json({
       success: true,
-      data: series,
+      data: pageItems,
       total,
       limit,
-      skip
+      skip,
+      source: 'tvSeriesIds',
+      sortBy,
     });
-  } catch (_) {
-    // MongoDB missing/failed – use TMDB fallback so TV section still works
-    try {
-      const fallback = await fetchFromTMDB(limit, skip, sortBy, sortOrder);
-      return NextResponse.json({
-        success: true,
-        data: fallback.data,
-        total: fallback.total,
-        limit,
-        skip
-      });
-    } catch (err) {
-      console.error('TV series fetch and fallback failed:', err);
-      return NextResponse.json(
-        { success: false, error: 'Failed to fetch TV series' },
-        { status: 500 }
-      );
-    }
+  } catch (err) {
+    console.error('TV series fetch failed:', err);
+    return NextResponse.json(
+      { success: false, error: 'Failed to fetch TV series' },
+      { status: 500 }
+    );
   }
 }
 

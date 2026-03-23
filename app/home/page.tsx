@@ -22,16 +22,169 @@ const fetchJsonCached = (url: string) => {
   return jsonCache.get(url)!;
 };
 
+const fillToMinMovies = async (input: Movie[], minCount: number): Promise<Movie[]> => {
+  const unique = new Map<string, Movie>();
+  for (const m of input) {
+    if (m?.imdb_id) unique.set(m.imdb_id, m);
+  }
+  if (unique.size >= minCount) return Array.from(unique.values()).slice(0, minCount);
+
+  const needed = minCount - unique.size;
+  const fallback = await fetchJsonCached(`/api/movies/list?offset=0&limit=${Math.max(needed * 5, 80)}&order=desc`)
+    .catch(() => null);
+  const extraIds = Array.isArray(fallback?.imdb_ids) ? (fallback.imdb_ids as string[]) : [];
+  if (extraIds.length > 0) {
+    const extraMovies = await getMoviesByImdbIds(extraIds);
+    for (const m of extraMovies) {
+      if (!m?.imdb_id) continue;
+      if (!unique.has(m.imdb_id)) unique.set(m.imdb_id, m);
+      if (unique.size >= minCount) break;
+    }
+  }
+  return Array.from(unique.values()).slice(0, minCount);
+};
+
+/** Homepage cards: only our poster paths / TMDB paths — never hotlink external CDN as primary. */
+const getMovieCardPoster = (movie: Movie): string => {
+  const raw = String(movie?.poster_path || "").trim();
+  if (!raw) return "/placeholder.svg";
+  return resolvePosterUrl(raw, "w500");
+};
+
+const getTvCardPoster = (series: any): string => {
+  if (series?.poster_path) return getTVImageUrl(series.poster_path, "w500");
+  return "/placeholder.svg";
+};
+
+function normalizeTitleKey(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[\u2019']/g, "'")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const TITLE_STOP_WORDS = new Set([
+  "the", "a", "an", "and", "of", "to", "in", "on", "for", "with", "at", "by",
+  "is", "are", "from", "my", "your", "our", "its", "it", "this", "that", "again",
+  "story", "season", "series", "tv"
+]);
+
+function titleTokens(s: string): string[] {
+  return normalizeTitleKey(s)
+    .split(" ")
+    .filter((w) => w.length >= 3 && !TITLE_STOP_WORDS.has(w));
+}
+
+function isKeywordMatch(refTitle: string, localTitle: string): boolean {
+  const rt = titleTokens(refTitle);
+  const lt = new Set(titleTokens(localTitle));
+  if (rt.length === 0 || lt.size === 0) return false;
+  let overlap = 0;
+  for (const t of rt) if (lt.has(t)) overlap++;
+  // Short titles require full token overlap, otherwise require at least 2 keywords.
+  if (rt.length <= 2) return overlap === rt.length;
+  return overlap >= 2;
+}
+
+/** Reference site = title order only; data stays 100% ours. */
+function reorderMoviesByRefTitles(movies: Movie[], refTitles: string[]): Movie[] {
+  if (!refTitles.length) return movies;
+  const pool = [...movies];
+  const used = new Set<Movie>();
+  const out: Movie[] = [];
+  for (const rt of refTitles) {
+    const want = normalizeTitleKey(rt);
+    if (!want) continue;
+    const idx = pool.findIndex((m) => {
+      if (used.has(m)) return false;
+      const title = String(m.title || "");
+      // Prefer exact title, then controlled keyword overlap.
+      return normalizeTitleKey(title) === want || isKeywordMatch(rt, title);
+    });
+    if (idx >= 0) {
+      const m = pool[idx];
+      used.add(m);
+      out.push(m);
+    }
+  }
+  // Important: do NOT append non-matching movies.
+  // If reference items are missing, we fill remaining slots via Adventure fallback.
+  return out;
+}
+
+function fillWithAdventureUnique(
+  base: Movie[],
+  adventure: Movie[],
+  count: number,
+  excludeImdbIds?: Set<string>
+): Movie[] {
+  const out: Movie[] = [];
+  const seen = new Set<string>();
+  const add = (m: Movie) => {
+    const id = String(m?.imdb_id || "");
+    if (!id) return;
+    if (excludeImdbIds?.has(id)) return;
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push(m);
+  };
+  for (const m of base) add(m);
+  for (const m of adventure) {
+    if (out.length >= count) break;
+    add(m);
+  }
+  return out.slice(0, count);
+}
+
+function seriesBaseKey(name: string): string {
+  return normalizeTitleKey(name).replace(/\s*season\s*\d+.*$/i, "").trim();
+}
+
+function reorderSeriesByRefTitles(series: any[], refTitles: string[]): any[] {
+  if (!refTitles.length) return series;
+  const pool = [...series];
+  const used = new Set<any>();
+  const out: any[] = [];
+  for (const rt of refTitles) {
+    const base = seriesBaseKey(rt);
+    if (!base) continue;
+    const idx = pool.findIndex((s) => {
+      if (used.has(s)) return false;
+      const n = normalizeTitleKey(s.name || s.title || "");
+      const b = seriesBaseKey(s.name || s.title || "");
+      // Exact-only match (no fuzzy substring).
+      return b === base;
+    });
+    if (idx >= 0) {
+      const s = pool[idx];
+      used.add(s);
+      out.push(s);
+    }
+  }
+  // Append remaining series as-is (no fuzzy selection) to keep grid filled.
+  for (const s of pool) if (!used.has(s)) out.push(s);
+  return out;
+}
+
 // TV Search Modal Component
 function TVSearchModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [searchTerm, setSearchTerm] = useState("");
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalResults, setTotalResults] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setSearchTerm("");
       setSuggestions([]);
+      setPage(1);
+      setTotalPages(0);
+      setTotalResults(0);
     }
   }, [isOpen]);
 
@@ -39,16 +192,26 @@ function TVSearchModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => vo
     const fetchSuggestions = async () => {
       if (searchTerm.trim().length < 2) {
         setSuggestions([]);
+        setPage(1);
+        setTotalPages(0);
+        setTotalResults(0);
         return;
       }
 
       setLoading(true);
+      setPage(1);
+      setLoadingMore(false);
       try {
-        const response = await fetch(`/api/tv-series-search?q=${encodeURIComponent(searchTerm)}&limit=10`);
+        const limit = 20;
+        const response = await fetch(
+          `/api/tv-series-search?q=${encodeURIComponent(searchTerm)}&limit=${limit}&page=1`
+        );
         const result = await response.json();
         
         if (result.success && result.data) {
           setSuggestions(result.data);
+          setTotalResults(result?.pagination?.total || 0);
+          setTotalPages(result?.pagination?.pages || 0);
         }
       } catch (error) {
         console.error('Error searching TV series:', error);
@@ -60,6 +223,41 @@ function TVSearchModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => vo
     const timeoutId = setTimeout(fetchSuggestions, 300);
     return () => clearTimeout(timeoutId);
   }, [searchTerm]);
+
+  const loadMore = async () => {
+    if (loadingMore) return;
+    if (searchTerm.trim().length < 2) return;
+    if (totalPages <= 0) return;
+    if (page >= totalPages) return;
+
+    setLoadingMore(true);
+    try {
+      const limit = 20;
+      const nextPage = page + 1;
+      const response = await fetch(
+        `/api/tv-series-search?q=${encodeURIComponent(searchTerm)}&limit=${limit}&page=${nextPage}`
+      );
+      const result = await response.json();
+      const newItems = Array.isArray(result?.data) ? result.data : [];
+
+      setSuggestions((prev) => {
+        const seen = new Set(prev.map((it) => `${it.imdb_id || ""}-${it.tmdb_id || ""}`));
+        const filtered = newItems.filter((it) => {
+          const key = `${it.imdb_id || ""}-${it.tmdb_id || ""}`;
+          return !seen.has(key);
+        });
+        return [...prev, ...filtered];
+      });
+
+      setTotalResults(result?.pagination?.total || totalResults);
+      setTotalPages(result?.pagination?.pages || totalPages);
+      setPage(nextPage);
+    } catch (e) {
+      console.error('Error loading more TV series search:', e);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const handleSuggestionClick = (series: any) => {
     const slug = series.name?.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -106,6 +304,11 @@ function TVSearchModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => vo
         {suggestions.length > 0 && (
           <div className="space-y-2">
             <h4 className="text-purple-400 font-semibold">💡 TV Series:</h4>
+            {totalResults > 0 && (
+              <div className="text-xs text-gray-400">
+                Showing {suggestions.length} of {totalResults.toLocaleString()}
+              </div>
+            )}
             {suggestions.map((series, index) => (
               <button
                 key={`${series.imdb_id}-${index}`}
@@ -131,6 +334,21 @@ function TVSearchModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => vo
                 </div>
               </button>
             ))}
+
+            {totalPages > 0 && page < totalPages && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={() => void loadMore()}
+                  disabled={loadingMore}
+                  className="w-full bg-gray-700 hover:bg-gray-600 disabled:opacity-60 text-white font-semibold px-4 py-2 rounded transition-colors"
+                >
+                  {loadingMore
+                    ? "Loading..."
+                    : `Load More (${Math.max(0, totalResults - suggestions.length)} remaining)`}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -335,15 +553,17 @@ export default function HomePage() {
   const [allMovies, setAllMovies] = useState<Movie[]>([]);
   const [movieDisplayCount, setMovieDisplayCount] = useState(14); // Load 14 movies at a time
   const [latestMovies, setLatestMovies] = useState<Movie[]>([]);
-  const [topRatedMovies, setTopRatedMovies] = useState<Movie[]>([]);
   const [latestTvSeries, setLatestTvSeries] = useState<any[]>([]);
+  /** Movies-home "Latest TV-Series" row: always from our API (not external links). */
+  const [homeLatestTvSeries, setHomeLatestTvSeries] = useState<any[]>([]);
   const [popularTvSeries, setPopularTvSeries] = useState<any[]>([]);
   const [featuredTvSeries, setFeaturedTvSeries] = useState<any[]>([]);
+  const [adventureFallbackMovies, setAdventureFallbackMovies] = useState<Movie[]>([]);
   const [itemsPerRow, setItemsPerRow] = useState(12);
-  const DISPLAY_COUNT = 12;
-  // Homepage cards: max 6 per row (desktop), not 8
+  const DISPLAY_COUNT = 16;
+  // Match reference layout: 2 / 4 / 6 / 8 cards per row.
   const homeGridClass =
-    "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4";
+    "grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3";
   
   // Mode switching state - Default to MOVIES
   const [currentMode, setCurrentMode] = useState<'movies' | 'tv'>('movies');
@@ -410,6 +630,29 @@ export default function HomePage() {
     initialDataLoadedRef.current = true;
     (async () => {
       try {
+        // Reference = title order only (never render their href/posters on our site).
+        // Disk snapshot — no ?force; avoid jsonCache so refresh=1 updates aren't stuck forever.
+        const referenceHome = await fetch(`/api/reference/home`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        const refSuggestionTitles = Array.isArray(referenceHome?.suggestions)
+          ? referenceHome.suggestions.map((x: { title?: string }) => String(x?.title || "").trim()).filter(Boolean)
+          : [];
+        const refLatestMovieTitles = Array.isArray(referenceHome?.latestMovies)
+          ? referenceHome.latestMovies.map((x: { title?: string }) => String(x?.title || "").trim()).filter(Boolean)
+          : [];
+        const refLatestTvTitles = Array.isArray(referenceHome?.latestTvSeries)
+          ? referenceHome.latestTvSeries.map((x: { title?: string }) => String(x?.title || "").trim()).filter(Boolean)
+          : [];
+
+        // Adventure fallback pool (local dataset), used when exact match isn't available.
+        const adv = await fetch(`/api/movies/genre?genreId=12&limit=${DISPLAY_COUNT * 3}&page=1`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
+        if (Array.isArray(adv?.movies)) {
+          setAdventureFallbackMovies(adv.movies);
+        }
+
         // Category-by-category loading: render Suggestions first for faster first paint.
         const mappedData = await fetchJsonCached(`/api/reference/home-mapped`).catch(() => null);
         const fallbackSuggestionsData = await fetchJsonCached(`/api/movies/latest?category=suggestions&limit=${DISPLAY_COUNT}`);
@@ -420,10 +663,19 @@ export default function HomePage() {
           ? (await getMoviesByImdbIds(suggestionsIds)).slice(0, DISPLAY_COUNT)
           : [];
 
-        const finalSuggestions =
+        const rawSuggestions =
           suggestionsFromStore.length > 0
             ? suggestionsFromStore
             : (Array.isArray(fallbackSuggestionsData.movies) ? fallbackSuggestionsData.movies : []);
+        let finalSuggestions = await fillToMinMovies(rawSuggestions, DISPLAY_COUNT);
+        finalSuggestions = reorderMoviesByRefTitles(finalSuggestions, refSuggestionTitles).slice(0, DISPLAY_COUNT);
+        finalSuggestions = fillWithAdventureUnique(finalSuggestions, adv?.movies || [], DISPLAY_COUNT);
+
+        const usedMovieIds = new Set<string>(
+          finalSuggestions
+            .map((m) => String(m?.imdb_id || ""))
+            .filter((id) => !!id)
+        );
 
         setAllMovies(finalSuggestions);
         setCategories((prev) => ({ ...prev, Suggestions: finalSuggestions }));
@@ -433,15 +685,34 @@ export default function HomePage() {
         const latestFromStore = latestIds.length
           ? (await getMoviesByImdbIds(latestIds)).slice(0, DISPLAY_COUNT)
           : [];
+        let nextLatest: Movie[] = [];
         if (latestFromStore.length > 0) {
-          setLatestMovies(latestFromStore);
+          nextLatest = await fillToMinMovies(latestFromStore, DISPLAY_COUNT);
         } else {
           const fallbackLatestData = await fetchJsonCached(`/api/movies/latest?category=latest&limit=${DISPLAY_COUNT}`);
-          setLatestMovies(Array.isArray(fallbackLatestData.movies) ? fallbackLatestData.movies : []);
+          const rawLatest = Array.isArray(fallbackLatestData.movies) ? fallbackLatestData.movies : [];
+          nextLatest = await fillToMinMovies(rawLatest, DISPLAY_COUNT);
         }
 
-        const fallbackTopRatedData = await fetchJsonCached(`/api/movies/latest?category=top_rated&limit=${DISPLAY_COUNT}`);
-        setTopRatedMovies(Array.isArray(fallbackTopRatedData.movies) ? fallbackTopRatedData.movies : []);
+        // Prevent repeat across homepage: Latest Movies should not reuse Suggestions movies.
+        nextLatest = nextLatest.filter((m) => {
+          const id = String(m?.imdb_id || "");
+          if (!id) return true;
+          return !usedMovieIds.has(id);
+        });
+
+        nextLatest = reorderMoviesByRefTitles(nextLatest, refLatestMovieTitles).slice(0, DISPLAY_COUNT);
+        nextLatest = fillWithAdventureUnique(nextLatest, adv?.movies || [], DISPLAY_COUNT, usedMovieIds);
+        setLatestMovies(nextLatest);
+
+        // Movies-home TV row: our data only, optionally reordered like reference titles.
+        const tvHomeRes = await fetchJsonCached(
+          `/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=first_air_date&sortOrder=desc`
+        ).catch(() => null);
+        let tvHome: any[] = tvHomeRes?.success && Array.isArray(tvHomeRes.data) ? tvHomeRes.data : [];
+        tvHome = reorderSeriesByRefTitles(tvHome, refLatestTvTitles).slice(0, DISPLAY_COUNT);
+        setHomeLatestTvSeries(tvHome);
+
       } catch {}
       setLoading(false);
     })();
@@ -457,24 +728,25 @@ export default function HomePage() {
 
     (async () => {
       try {
-        const [latestTvData, popularTvData, featuredTvData] = await Promise.all([
-          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=first_air_date&sortOrder=desc`),
-          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=vote_average&sortOrder=desc&minRating=7.0`),
-          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=vote_average&sortOrder=desc&minRating=8.0`),
-        ]);
+        // Load latest first for faster first paint; fetch other sections in parallel without heavy enrichment.
+        const latestTvData = await fetchJsonCached(
+          `/api/tv-series-db?limit=12&sortBy=first_air_date&sortOrder=desc`
+        );
 
         if (latestTvData?.success && Array.isArray(latestTvData.data)) {
           setLatestTvSeries(latestTvData.data);
         }
-        if (popularTvData?.success && Array.isArray(popularTvData.data)) {
-          setPopularTvSeries(popularTvData.data);
-        }
-        if (featuredTvData?.success && Array.isArray(featuredTvData.data)) {
-          setFeaturedTvSeries(featuredTvData.data);
-        }
+
+        const [popularTvData, featuredTvData] = await Promise.all([
+          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=vote_average&sortOrder=desc&minRating=7.0`),
+          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=vote_average&sortOrder=desc&minRating=8.0`),
+        ]);
+
+        if (popularTvData?.success && Array.isArray(popularTvData.data)) setPopularTvSeries(popularTvData.data);
+        if (featuredTvData?.success && Array.isArray(featuredTvData.data)) setFeaturedTvSeries(featuredTvData.data);
       } catch {}
     })();
-  }, [currentMode]);
+  }, [currentMode, latestTvSeries.length, popularTvSeries.length, featuredTvSeries.length]);
 
   // Mode switching functions
   const switchToMovies = () => {
@@ -710,8 +982,8 @@ export default function HomePage() {
         <div className="space-y-6 px-3 sm:px-4">
           {currentMode === "movies" ? (
             <>
-              {/* Suggestions */}
-              <section>
+          {/* Suggestions */}
+          <section>
                 <div className="mb-3">
                   <div className="inline-flex items-center bg-[#79c142] text-white text-base md:text-lg font-semibold px-4 py-1.5 rounded">
                     Suggestions
@@ -728,16 +1000,16 @@ export default function HomePage() {
                   </div>
                 ) : (
                   <div className={homeGridClass}>
-                    {allMovies.slice(0, DISPLAY_COUNT).map((movie, index) => (
+                    {allMovies.slice(0, DISPLAY_COUNT).map((movie: Movie, index: number) => (
                       <Link
-                        key={`${movie.imdb_id}-${index}`}
+                        key={`${String(movie.imdb_id ?? index)}-${index}`}
                         href={generateMovieUrl(movie.title, movie.imdb_id)}
                         className="group block"
                       >
                         <div className="bg-white rounded shadow overflow-hidden">
                           <div className="relative aspect-[2/3]">
                             <Image
-                              src={resolvePosterUrl(movie.poster_path, "w500")}
+                              src={getMovieCardPoster(movie)}
                               alt={movie.title}
                               fill
                               className="object-cover"
@@ -757,26 +1029,26 @@ export default function HomePage() {
                     ))}
                   </div>
                 )}
-              </section>
+          </section>
 
-              {/* Latest Movies */}
-              <section>
+          {/* Latest Movies */}
+          <section>
                 <div className="mb-3">
                   <div className="inline-flex items-center bg-[#79c142] text-white text-base md:text-lg font-semibold px-4 py-1.5 rounded">
                     Latest Movies
                   </div>
                 </div>
                 <div className={homeGridClass}>
-                  {(latestMovies || []).slice(0, DISPLAY_COUNT).map((movie: any, index: number) => (
+                  {(latestMovies || []).slice(0, DISPLAY_COUNT).map((movie: Movie, index: number) => (
                     <Link
-                      key={`latest-m-${movie.imdb_id ?? index}-${index}`}
+                      key={`latest-m-${String(movie.imdb_id ?? index)}-${index}`}
                       href={generateMovieUrl(movie.title, movie.imdb_id)}
                       className="group block"
                     >
                       <div className="bg-white rounded shadow overflow-hidden">
                         <div className="relative aspect-[2/3]">
                           <Image
-                            src={resolvePosterUrl(movie.poster_path, "w500")}
+                            src={getMovieCardPoster(movie)}
                             alt={movie.title}
                             fill
                             className="object-cover"
@@ -795,45 +1067,60 @@ export default function HomePage() {
                     </Link>
                   ))}
                 </div>
-              </section>
+          </section>
 
-              {/* Top Rated */}
-              <section>
+          {/* Latest TV-Series */}
+          <section>
                 <div className="mb-3">
                   <div className="inline-flex items-center bg-[#79c142] text-white text-base md:text-lg font-semibold px-4 py-1.5 rounded">
-                    Top Rated
+                    Latest TV-Series
                   </div>
                 </div>
                 <div className={homeGridClass}>
-                  {topRatedMovies.slice(0, DISPLAY_COUNT).map((movie: any, index: number) => (
+                  {homeLatestTvSeries.slice(0, DISPLAY_COUNT).map((series: any, index: number) => {
+                    const name = series.name || series.title || `TV Series ${series.imdb_id || series.tmdb_id || index}`;
+                    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+                    const href = `/${slug}-${series.tmdb_id || series.tmdbId || series.imdb_id || series.imdbId || ""}`;
+                    const eps =
+                      series?.seasons?.reduce?.((sum: number, s: any) => sum + (s?.episodes?.length || 0), 0) ||
+                      series?.episodeCount ||
+                      series?.number_of_episodes ||
+                      0;
+                    return (
                     <Link
-                      key={`top-rated-movies-${movie.imdb_id ?? index}-${index}`}
-                      href={generateMovieUrl(movie.title, movie.imdb_id)}
+                      key={`movies-mode-tv-latest-${String(series.tmdb_id ?? series.imdb_id ?? index)}-${index}`}
+                      href={href}
                       className="group block"
                     >
                       <div className="bg-white rounded shadow overflow-hidden">
                         <div className="relative aspect-[2/3]">
                           <Image
-                            src={resolvePosterUrl(movie.poster_path, "w500")}
-                            alt={movie.title}
+                            src={getTvCardPoster(series)}
+                            alt={name}
                             fill
                             className="object-cover"
                             unoptimized={true}
                           />
                           <span className="absolute top-2 right-2 bg-[#79c142] text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                            HD
+                            TV
                           </span>
+                          {eps > 0 && (
+                            <span className="absolute top-2 left-2 bg-black/70 text-white text-[10px] font-bold px-2 py-0.5 rounded">
+                              Eps {eps}
+                            </span>
+                          )}
                         </div>
                         <div className="bg-black px-2 py-2">
                           <div className="text-white text-xs font-semibold line-clamp-1">
-                            {movie.title}
+                            {name}
                           </div>
                         </div>
                       </div>
                     </Link>
-                  ))}
+                  );
+                  })}
                 </div>
-              </section>
+          </section>
             </>
           ) : (
             <>

@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { getYear, searchMoviesByTitle } from "@/api/tmdb";
-import type { Movie, MovieListItem } from "@/api/tmdb";
+import { getYear } from "@/api/tmdb";
+import type { MovieListItem } from "@/api/tmdb";
 import { generateMovieUrl } from "@/lib/slug";
 import StructuredData from '@/components/StructuredData';
 import SiteLogo from '@/components/SiteLogo';
@@ -25,15 +25,20 @@ export default function SimpleLandingPage() {
     setShowResults(true);
     
     try {
-      const results = await searchMoviesByTitle(searchTerm.trim(), 20);
-      if (Array.isArray(results)) {
-        const moviesData = results
+      const response = await fetch(
+        `/api/tmdb-search-movies?q=${encodeURIComponent(searchTerm.trim())}&limit=20&page=1`
+      );
+      const result = await response.json();
+      if (result?.success && Array.isArray(result.data)) {
+        const moviesData = result.data
           .filter(movie => movie.imdb_id && movie.imdb_id.trim() !== '')
           .map(movie => ({
             ...movie,
             imdb_id: movie.imdb_id!,
           }));
         setSearchResults(moviesData);
+      } else {
+        setSearchResults([]);
       }
     } catch (error) {
       console.error('Search error:', error);

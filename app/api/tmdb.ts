@@ -309,3 +309,76 @@ export async function searchMoviesByTitle(searchTerm: string, limit: number = 20
     return [];
   }
 }
+
+// Search movies with pagination metadata (TMDB search/movie endpoint).
+// We still fetch each result's details to extract `imdb_id`.
+export async function searchMoviesByTitlePaginated(
+  searchTerm: string,
+  page: number = 1,
+  limit: number = 20
+): Promise<{
+  results: MovieListItem[];
+  pagination: { page: number; limit: number; totalResults: number; totalPages: number };
+}> {
+  try {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.max(1, Math.min(50, limit));
+
+    const url = `${TMDB_BASE_URL}/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(
+      searchTerm
+    )}&page=${safePage}`;
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    const totalResults = typeof data?.total_results === 'number' ? data.total_results : 0;
+    const totalPages = typeof data?.total_pages === 'number' ? data.total_pages : 0;
+
+    if (!data.results || !Array.isArray(data.results)) {
+      return {
+        results: [],
+        pagination: { page: safePage, limit: safeLimit, totalResults, totalPages }
+      };
+    }
+
+    const moviesPage = data.results.slice(0, safeLimit);
+
+    const moviesWithImdbIds = await Promise.all(
+      moviesPage.map(async (movie: Record<string, unknown>) => {
+        try {
+          const detailsUrl = `${TMDB_BASE_URL}/movie/${movie.id}?api_key=${TMDB_API_KEY}`;
+          const detailsResponse = await fetch(detailsUrl);
+          const movieDetails = await detailsResponse.json();
+
+          return {
+            ...movie,
+            imdb_id: movieDetails.imdb_id,
+            runtime: movieDetails.runtime
+          };
+        } catch {
+          return {
+            ...movie,
+            imdb_id: null,
+            runtime: null
+          };
+        }
+      })
+    );
+
+    // Filter out movies without IMDB IDs
+    const validMovies = moviesWithImdbIds.filter(
+      (movie): movie is MovieListItem => !!movie.imdb_id
+    );
+
+    return {
+      results: validMovies,
+      pagination: { page: safePage, limit: safeLimit, totalResults, totalPages }
+    };
+  } catch (error) {
+    console.error('Error searching movies (paginated):', error);
+    return {
+      results: [],
+      pagination: { page: Math.max(1, page), limit: Math.max(1, limit), totalResults: 0, totalPages: 0 }
+    };
+  }
+}

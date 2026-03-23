@@ -4,17 +4,19 @@ import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
-import { getMoviesByImdbIds, getYear, searchMoviesByTitle } from "@/api/tmdb";
-import { getRandomMovieIds } from "@/data/bulkMovieIds";
-import type { Movie } from "@/api/tmdb";
+import { getYear } from "@/api/tmdb";
 import { generateMovieUrl } from "@/lib/slug";
 import Head from "next/head";
 
 function SearchResultsContent() {
   const searchParams = useSearchParams();
   const query = searchParams.get('q') || '';
-  const [results, setResults] = useState<Movie[]>([]);
+  const [results, setResults] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
+  const [totalResults, setTotalResults] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -22,55 +24,69 @@ function SearchResultsContent() {
       if (!query.trim()) {
         setResults([]);
         setLoading(false);
+        setPage(1);
+        setTotalResults(0);
+        setTotalPages(0);
         return;
       }
 
       setLoading(true);
       setError(null);
+      setPage(1);
+      setResults([]);
+      setTotalResults(0);
+      setTotalPages(0);
 
       try {
-        // Use TMDB search API for better results
-        const searchResults = await searchMoviesByTitle(query, 50);
-        
-        // Convert to Movie type for consistency
-        const moviesData = searchResults
-          .filter(movie => movie.imdb_id && movie.imdb_id.trim() !== '') // Only include movies with valid imdb_id
-          .map(movie => ({
-            ...movie,
-            imdb_id: movie.imdb_id!, // We know it exists due to filter
-            overview: '', // Will be filled if needed
-            genres: [], // Will be filled if needed
-            vote_count: 0,
-            popularity: 0,
-            adult: false,
-            original_language: 'en',
-            original_title: movie.title,
-            backdrop_path: movie.backdrop_path || null,
-          }));
-        
-        // Sort by relevance (exact matches first, then partial matches)
-        const sorted = moviesData.sort((a, b) => {
-          const aExact = a.title.toLowerCase() === query.toLowerCase();
-          const bExact = b.title.toLowerCase() === query.toLowerCase();
-          
-          if (aExact && !bExact) return -1;
-          if (!aExact && bExact) return 1;
-          
-          return (b.vote_average || 0) - (a.vote_average || 0);
-        });
-        
-        setResults(sorted.slice(0, 60)); // Show up to 60 results
-      } catch (error) {
-        console.error('Error searching movies:', error);
+        const limit = 20;
+        const res = await fetch(
+          `/api/tmdb-search-movies?q=${encodeURIComponent(query)}&limit=${limit}&page=1`
+        );
+        const json = await res.json();
+        if (json?.success) {
+          setResults(Array.isArray(json.data) ? json.data : []);
+          setTotalResults(json.pagination?.totalResults || 0);
+          setTotalPages(json.pagination?.totalPages || 0);
+        } else {
+          setError('Failed to search movies. Please try again.');
+          setResults([]);
+        }
+      } catch (e) {
+        console.error('Error searching movies:', e);
         setError('Failed to search movies. Please try again.');
         setResults([]);
+      } finally {
+        setLoading(false);
       }
-
-      setLoading(false);
     };
 
-    performSearch();
+    void performSearch();
   }, [query]);
+
+  const loadMore = async () => {
+    if (loadingMore) return;
+    if (page >= totalPages) return;
+
+    setLoadingMore(true);
+    try {
+      const limit = 20;
+      const nextPage = page + 1;
+      const res = await fetch(
+        `/api/tmdb-search-movies?q=${encodeURIComponent(query)}&limit=${limit}&page=${nextPage}`
+      );
+      const json = await res.json();
+      if (json?.success) {
+        setResults((prev) => [...prev, ...(Array.isArray(json.data) ? json.data : [])]);
+        setTotalResults(json.pagination?.totalResults || totalResults);
+        setTotalPages(json.pagination?.totalPages || totalPages);
+        setPage(nextPage);
+      }
+    } catch (e) {
+      console.error('Error loading more movies:', e);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -97,10 +113,13 @@ function SearchResultsContent() {
             Search Results
           </h1>
           <p className="text-gray-400">
-            {results.length > 0 
-              ? `Found ${results.length} movie${results.length !== 1 ? 's' : ''} for &quot;${query}&quot;`
-              : `No movies found for "${query}"`
-            }
+            {results.length > 0 ? (
+              <>
+                Showing {results.length} of {totalResults.toLocaleString()} movies for "{query}"
+              </>
+            ) : (
+              <>No movies found for "{query}"</>
+            )}
           </p>
         </div>
 
@@ -183,6 +202,18 @@ function SearchResultsContent() {
                 </div>
               </Link>
             ))}
+          </div>
+        )}
+
+        {!loading && results.length > 0 && page < totalPages && (
+          <div className="text-center mt-8">
+            <button
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              className="bg-[#3fae2a] hover:bg-[#35a024] disabled:opacity-60 text-white font-semibold px-6 py-3 rounded"
+            >
+              {loadingMore ? "Loading..." : `Load More Movies (${Math.max(0, totalResults - results.length)} remaining)`}
+            </button>
           </div>
         )}
       </div>

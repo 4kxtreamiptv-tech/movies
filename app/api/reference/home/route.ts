@@ -1,84 +1,38 @@
 import { NextResponse } from "next/server";
+import {
+  REFERENCE_HOME_SOURCE_URL,
+  buildReferenceHomePayloadFromHtml,
+  isSnapshotEmpty,
+  readReferenceHomeSnapshot,
+  writeReferenceHomeSnapshot,
+  type RefHomeDiskPayload,
+} from "@/lib/referenceHomeSnapshot";
 
-type RefMovie = {
-  title: string;
-  href: string;
-  poster: string | null;
-  badge: string | null; // HD/CAM/EpsX/TV
-};
+/** Short in-memory cache so repeated API hits don't re-read disk every time. */
+let mem: { at: number; data: RefHomeDiskPayload } | null = null;
+const MEM_TTL_MS = 60 * 1000;
 
-type RefHomePayload = {
-  source: string;
-  fetchedAt: string;
-  suggestions: RefMovie[];
-  latestMovies: RefMovie[];
-  latestTvSeries: RefMovie[];
-};
-
-const SOURCE_URL = "https://ww8.123moviesfree.net/home/";
-
-let cache: { at: number; data: RefHomePayload } | null = null;
-const TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-function extractSection(html: string, title: string): string | null {
-  const marker = `<div class="fs-6 list-title">${title}</div>`;
-  const start = html.indexOf(marker);
-  if (start === -1) return null;
-  const after = html.slice(start + marker.length);
-  // Next section marker
-  const next = after.indexOf(`<div class="fs-6 list-title">`);
-  return next === -1 ? after : after.slice(0, next);
-}
-
-function parseItems(sectionHtml: string): RefMovie[] {
-  const items: RefMovie[] = [];
-
-  // Capture cards. Title is usually in alt="" or inside <h2 ...>Title</h2>
-  const linkRe = /<a\s+href="([^"]+)"[^>]*class="[^"]*\bposter\b[^"]*"[^>]*>([\s\S]*?)<\/a>/g;
-  let m: RegExpExecArray | null;
-  while ((m = linkRe.exec(sectionHtml))) {
-    const href = m[1];
-    const inner = m[2] || "";
-
-    const alt = inner.match(/alt="([^"]+)"/i)?.[1] ?? null;
-    const h2 = inner.match(/<h2[^>]*>\s*([^<]+)\s*<\/h2>/i)?.[1] ?? null;
-    const title = (alt || h2 || "").trim();
-    if (!title) continue;
-
-    const poster =
-      inner.match(/data-src="([^"]+\.(?:jpg|jpeg|png|webp))"/i)?.[1] ??
-      inner.match(/<img[^>]+src="([^"]+\.(?:jpg|jpeg|png|webp))"/i)?.[1] ??
-      null;
-
-    const badge =
-      inner.match(/<span class="mlbq">\s*([^<\s]+)\s*<\/span>/i)?.[1] ??
-      inner.match(/<span class="mlbe">\s*Eps<i>\s*(\d+)\s*<\/i>\s*<\/span>/i)?.[1]?.trim()
-        ? `Eps${inner.match(/<span class="mlbe">\s*Eps<i>\s*(\d+)\s*<\/i>\s*<\/span>/i)?.[1]}`
-        : null;
-
-    items.push({ title, href, poster, badge });
-  }
-
-  // Dedup by title keeping order
-  const seen = new Set<string>();
-  return items.filter((it) => {
-    const key = it.title.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    if (cache && Date.now() - cache.at < TTL_MS) {
-      return NextResponse.json(cache.data, {
+    const { searchParams } = new URL(request.url);
+    const refresh = searchParams.get("refresh") === "1" || searchParams.get("force") === "1";
+
+    if (!refresh && mem && Date.now() - mem.at < MEM_TTL_MS) {
+      return NextResponse.json(mem.data, {
+        headers: { "Cache-Control": "public, max-age=60" },
+      });
+    }
+
+    const disk = readReferenceHomeSnapshot();
+
+    if (!refresh && disk && !isSnapshotEmpty(disk)) {
+      mem = { at: Date.now(), data: disk };
+      return NextResponse.json(disk, {
         headers: { "Cache-Control": "public, max-age=300" },
       });
     }
 
-    const res = await fetch(SOURCE_URL, {
-      // avoid edge caching oddities
+    const res = await fetch(REFERENCE_HOME_SOURCE_URL, {
       cache: "no-store",
       headers: {
         "User-Agent":
@@ -87,32 +41,30 @@ export async function GET() {
       },
     });
     if (!res.ok) {
+      if (disk && !isSnapshotEmpty(disk)) {
+        return NextResponse.json(disk, { status: 200 });
+      }
       return NextResponse.json(
         { error: `Failed to fetch source: ${res.status}` },
         { status: 502 }
       );
     }
+
     const html = await res.text();
+    const data = buildReferenceHomePayloadFromHtml(html);
 
-    const suggestionsHtml = extractSection(html, "Suggestions") || "";
-    const latestMoviesHtml = extractSection(html, "Latest Movies") || "";
-    const latestTvHtml = extractSection(html, "Latest TV-Series") || "";
+    writeReferenceHomeSnapshot(data);
+    mem = { at: Date.now(), data };
 
-    const data: RefHomePayload = {
-      source: SOURCE_URL,
-      fetchedAt: new Date().toISOString(),
-      suggestions: parseItems(suggestionsHtml).slice(0, 60),
-      latestMovies: parseItems(latestMoviesHtml).slice(0, 60),
-      latestTvSeries: parseItems(latestTvHtml).slice(0, 60),
-    };
-
-    cache = { at: Date.now(), data };
     return NextResponse.json(data, {
       headers: { "Cache-Control": "public, max-age=300" },
     });
   } catch (e) {
     console.error("Error in /api/reference/home:", e);
+    const disk = readReferenceHomeSnapshot();
+    if (disk && !isSnapshotEmpty(disk)) {
+      return NextResponse.json(disk);
+    }
     return NextResponse.json({ error: "Failed to load reference home" }, { status: 500 });
   }
 }
-

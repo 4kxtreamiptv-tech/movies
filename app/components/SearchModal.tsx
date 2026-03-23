@@ -3,8 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { getYear, searchMoviesByTitle } from "@/api/tmdb";
-import type { Movie } from "@/api/tmdb";
+import { getYear } from "@/api/tmdb";
 import { generateMovieUrl } from "@/lib/slug";
 
 interface SearchModalProps {
@@ -17,12 +16,19 @@ export default function SearchModal({ isOpen, onClose, searchType = 'movies' }: 
   const [searchTerm, setSearchTerm] = useState("");
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalResults, setTotalResults] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
     if (isOpen) {
       setSearchTerm("");
       setSuggestions([]);
+      setPage(1);
+      setTotalPages(0);
+      setTotalResults(0);
     }
   }, [isOpen]);
 
@@ -30,55 +36,38 @@ export default function SearchModal({ isOpen, onClose, searchType = 'movies' }: 
     const fetchSuggestions = async () => {
       if (searchTerm.trim().length < 2) {
         setSuggestions([]);
+        setPage(1);
+        setTotalPages(0);
+        setTotalResults(0);
         return;
       }
 
       setLoading(true);
       try {
-        console.log('SearchModal: Starting search for:', searchTerm, 'Type:', searchType);
-        
+        setPage(1);
+
+        const limit = 20;
+        const q = encodeURIComponent(searchTerm);
         if (searchType === 'tv') {
-          // Search TV series from our API
-          const response = await fetch(`/api/tv-series-search?q=${encodeURIComponent(searchTerm)}&limit=20`);
+          const response = await fetch(`/api/tv-series-search?q=${q}&limit=${limit}&page=1`);
           const result = await response.json();
-          
-          if (result.success && Array.isArray(result.data)) {
-            setSuggestions(result.data.slice(0, 8));
-          } else {
-            setSuggestions([]);
-          }
+          const newItems = Array.isArray(result?.data) ? result.data : [];
+          setSuggestions(newItems);
+          setTotalResults(result?.pagination?.total || 0);
+          setTotalPages(result?.pagination?.pages || 0);
         } else {
-          // Search movies using TMDB
-          const searchResults = await searchMoviesByTitle(searchTerm, 20);
-          
-          // Make sure searchResults is an array
-          if (!Array.isArray(searchResults)) {
-            console.error('SearchModal: searchResults is not an array:', searchResults);
-            setSuggestions([]);
-            return;
-          }
-          
-          // Convert to Movie type for consistency
-          const moviesData = searchResults
-            .filter(movie => movie.imdb_id && movie.imdb_id.trim() !== '') // Only include movies with valid imdb_id
-            .map(movie => ({
-              ...movie,
-              imdb_id: movie.imdb_id!, // We know it exists due to filter
-              overview: '', // Will be filled if needed
-              genres: [], // Will be filled if needed
-              vote_count: 0,
-              popularity: 0,
-              adult: false,
-              original_language: 'en',
-              original_title: movie.title,
-              backdrop_path: movie.backdrop_path || null,
-            }));
-          
-          setSuggestions(moviesData.slice(0, 8)); // Show max 8 suggestions
+          const response = await fetch(`/api/tmdb-search-movies?q=${q}&limit=${limit}&page=1`);
+          const result = await response.json();
+          const newItems = Array.isArray(result?.data) ? result.data : [];
+          setSuggestions(newItems);
+          setTotalResults(result?.pagination?.totalResults || 0);
+          setTotalPages(result?.pagination?.totalPages || 0);
         }
       } catch (error) {
         console.error('Error fetching suggestions:', error);
         setSuggestions([]);
+        setTotalPages(0);
+        setTotalResults(0);
       }
       setLoading(false);
     };
@@ -86,6 +75,54 @@ export default function SearchModal({ isOpen, onClose, searchType = 'movies' }: 
     const debounceTimer = setTimeout(fetchSuggestions, 300);
     return () => clearTimeout(debounceTimer);
   }, [searchTerm, searchType]);
+
+  const loadMore = async () => {
+    if (loadingMore) return;
+    if (!searchTerm.trim() || searchTerm.trim().length < 2) return;
+    if (totalPages <= 0) return;
+    if (page >= totalPages) return;
+
+    setLoadingMore(true);
+    try {
+      const limit = 20;
+      const q = encodeURIComponent(searchTerm);
+      const nextPage = page + 1;
+
+      const response =
+        searchType === 'tv'
+          ? await fetch(`/api/tv-series-search?q=${q}&limit=${limit}&page=${nextPage}`)
+          : await fetch(`/api/tmdb-search-movies?q=${q}&limit=${limit}&page=${nextPage}`);
+
+      const result = await response.json();
+      const newItems = Array.isArray(result?.data) ? result.data : [];
+
+      // Dedupe by imdb_id/tmdb_id
+      setSuggestions((prev) => {
+        const seen = new Set(
+          prev.map((it) => `${it.imdb_id || ""}-${it.tmdb_id || it.tmdbId || ""}`)
+        );
+        const filtered = newItems.filter((it) => {
+          const key = `${it.imdb_id || ""}-${it.tmdb_id || it.tmdbId || ""}`;
+          return !seen.has(key);
+        });
+        return [...prev, ...filtered];
+      });
+
+      if (searchType === 'tv') {
+        setTotalResults(result?.pagination?.total || totalResults);
+        setTotalPages(result?.pagination?.pages || totalPages);
+      } else {
+        setTotalResults(result?.pagination?.totalResults || totalResults);
+        setTotalPages(result?.pagination?.totalPages || totalPages);
+      }
+
+      setPage(nextPage);
+    } catch (e) {
+      console.error('Error loading more search suggestions:', e);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,6 +204,11 @@ export default function SearchModal({ isOpen, onClose, searchType = 'movies' }: 
             {suggestions.length > 0 && (
               <div className="mb-6">
                 <h4 className="text-purple-400 font-semibold mb-3">💡 Suggestions:</h4>
+                {totalResults > 0 && (
+                  <div className="text-xs text-gray-400 mb-2">
+                    Showing {suggestions.length} of {totalResults.toLocaleString()}
+                  </div>
+                )}
                 <div className="space-y-2 max-h-64 overflow-y-auto">
                   {suggestions.map((item, index) => (
                     <button
@@ -205,6 +247,19 @@ export default function SearchModal({ isOpen, onClose, searchType = 'movies' }: 
                     </button>
                   ))}
                 </div>
+
+                {totalPages > 0 && page < totalPages && (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      onClick={() => void loadMore()}
+                      disabled={loadingMore}
+                      className="w-full bg-gray-700 hover:bg-gray-600 disabled:opacity-60 text-white font-semibold px-4 py-2 rounded transition-colors"
+                    >
+                      {loadingMore ? "Loading..." : `Load More (${Math.max(0, totalResults - suggestions.length)} remaining)`}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
