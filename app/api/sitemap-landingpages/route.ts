@@ -1,24 +1,35 @@
 import { NextResponse } from 'next/server';
 import { getBaseUrlForBuild } from '@/lib/domain';
+import { extendedLandingSlugs } from '@/data/extendedKeywordLandings';
 
 const DOMAIN = getBaseUrlForBuild();
+
+const LEGACY_LANDING_SLUGS = [
+  'fmovies',
+  'gomovies',
+  'hurawatch',
+  'lookmovie',
+  'popcornflix',
+  'soap2day',
+  'solarmovie',
+  'yesmovies',
+] as const;
 
 export async function GET() {
   try {
     const lastmod = new Date().toISOString();
-    
-    // Main page + Landing variant pages (9 pages total)
-    const pages = [
+
+    const pages: { url: string; priority: string; changefreq: string }[] = [
       { url: DOMAIN, priority: '1.0', changefreq: 'daily' },
-      { url: `${DOMAIN}/fmovies`, priority: '0.8', changefreq: 'weekly' },
-      { url: `${DOMAIN}/gomovies`, priority: '0.8', changefreq: 'weekly' },
-      { url: `${DOMAIN}/hurawatch`, priority: '0.8', changefreq: 'weekly' },
-      { url: `${DOMAIN}/lookmovie`, priority: '0.8', changefreq: 'weekly' },
-      { url: `${DOMAIN}/popcornflix`, priority: '0.8', changefreq: 'weekly' },
-      { url: `${DOMAIN}/soap2day`, priority: '0.8', changefreq: 'weekly' },
-      { url: `${DOMAIN}/solarmovie`, priority: '0.8', changefreq: 'weekly' },
-      { url: `${DOMAIN}/yesmovies`, priority: '0.8', changefreq: 'weekly' },
     ];
+
+    for (const slug of extendedLandingSlugs) {
+      pages.push({ url: `${DOMAIN}/${slug}`, priority: '0.8', changefreq: 'weekly' });
+    }
+
+    for (const slug of LEGACY_LANDING_SLUGS) {
+      pages.push({ url: `${DOMAIN}/${slug}`, priority: '0.8', changefreq: 'weekly' });
+    }
     
     const urlEntries = pages
       .map(page => `  <url>

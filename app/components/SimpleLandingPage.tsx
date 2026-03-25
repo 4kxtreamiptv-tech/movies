@@ -282,10 +282,11 @@ export default function SimpleLandingPage() {
             </h4>
 
             <p>
-              Anyone who watches movies with friends and family is known to have a better bonding when 
-              compared to the rest. The reason being the fact that they share the same experience and 
-              emotions. 123moviesfree.net does not store any data. It only links to data only available 
-              on web. Copyright owners can request removal of infringing data through Cloudflare.
+              Anyone who watches movies with friends and family is known to have a better bonding when
+              compared to the rest. The reason being the fact that they share the same experience and
+              emotions. This site does not host or store video files on its servers. We only organize
+              links to publicly available sources. Copyright holders may request removal of infringing
+              material through our normal contact or DMCA process.
             </p>
 
             <h4 className="text-xl font-bold text-white mt-8 mb-3">
