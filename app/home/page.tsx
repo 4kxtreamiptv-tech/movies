@@ -30,7 +30,7 @@ const fillToMinMovies = async (input: Movie[], minCount: number): Promise<Movie[
   if (unique.size >= minCount) return Array.from(unique.values()).slice(0, minCount);
 
   const needed = minCount - unique.size;
-  const fallback = await fetchJsonCached(`/api/movies/list?offset=0&limit=${Math.max(needed * 5, 80)}&order=desc`)
+  const fallback = await fetchJsonCached(`/api/movies/list?offset=0&limit=${Math.max(needed * 3, 40)}&order=desc`)
     .catch(() => null);
   const extraIds = Array.isArray(fallback?.imdb_ids) ? (fallback.imdb_ids as string[]) : [];
   if (extraIds.length > 0) {
@@ -630,11 +630,17 @@ export default function HomePage() {
     initialDataLoadedRef.current = true;
     (async () => {
       try {
-        // Reference = title order only (never render their href/posters on our site).
-        // Disk snapshot — no ?force; avoid jsonCache so refresh=1 updates aren't stuck forever.
-        const referenceHome = await fetch(`/api/reference/home`)
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null);
+        // Keep first visit fast: fetch critical sources in parallel.
+        const [referenceHome, adv, mappedData, fallbackSuggestionsData] = await Promise.all([
+          fetch(`/api/reference/home`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null),
+          fetch(`/api/movies/genre?genreId=12&limit=${DISPLAY_COUNT * 3}&page=1`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null),
+          fetchJsonCached(`/api/reference/home-mapped`).catch(() => null),
+          fetchJsonCached(`/api/movies/latest?category=suggestions&limit=${DISPLAY_COUNT}`).catch(() => null),
+        ]);
         const refSuggestionTitles = Array.isArray(referenceHome?.suggestions)
           ? referenceHome.suggestions.map((x: { title?: string }) => String(x?.title || "").trim()).filter(Boolean)
           : [];
@@ -645,20 +651,13 @@ export default function HomePage() {
           ? referenceHome.latestTvSeries.map((x: { title?: string }) => String(x?.title || "").trim()).filter(Boolean)
           : [];
 
-        // Adventure fallback pool (local dataset), used when exact match isn't available.
-        const adv = await fetch(`/api/movies/genre?genreId=12&limit=${DISPLAY_COUNT * 3}&page=1`)
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null);
         if (Array.isArray(adv?.movies)) {
           setAdventureFallbackMovies(adv.movies);
         }
 
         // Category-by-category loading: render Suggestions first for faster first paint.
-        const mappedData = await fetchJsonCached(`/api/reference/home-mapped`).catch(() => null);
-        const fallbackSuggestionsData = await fetchJsonCached(`/api/movies/latest?category=suggestions&limit=${DISPLAY_COUNT}`);
 
         const suggestionsIds = (mappedData?.suggestionsImdbIds || []) as string[];
-        const latestIds = (mappedData?.latestMoviesImdbIds || []) as string[];
         const suggestionsFromStore = suggestionsIds.length
           ? (await getMoviesByImdbIds(suggestionsIds)).slice(0, DISPLAY_COUNT)
           : [];
@@ -681,37 +680,45 @@ export default function HomePage() {
         setCategories((prev) => ({ ...prev, Suggestions: finalSuggestions }));
         setLoading(false);
 
-        // Load next categories progressively in background.
-        const latestFromStore = latestIds.length
-          ? (await getMoviesByImdbIds(latestIds)).slice(0, DISPLAY_COUNT)
-          : [];
-        let nextLatest: Movie[] = [];
-        if (latestFromStore.length > 0) {
-          nextLatest = await fillToMinMovies(latestFromStore, DISPLAY_COUNT);
-        } else {
-          const fallbackLatestData = await fetchJsonCached(`/api/movies/latest?category=latest&limit=${DISPLAY_COUNT}`);
-          const rawLatest = Array.isArray(fallbackLatestData.movies) ? fallbackLatestData.movies : [];
-          nextLatest = await fillToMinMovies(rawLatest, DISPLAY_COUNT);
-        }
+        // Non-critical sections are deferred to avoid slowing first paint.
+        setTimeout(async () => {
+          try {
+            const [latestIdsData, fallbackLatestData, tvHomeRes] = await Promise.all([
+              fetchJsonCached(`/api/movies/list?offset=0&limit=${DISPLAY_COUNT * 2}&order=desc`).catch(() => null),
+              fetchJsonCached(`/api/movies/latest?category=latest&limit=${DISPLAY_COUNT}`).catch(() => null),
+              fetchJsonCached(`/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=first_air_date&sortOrder=desc`).catch(() => null),
+            ]);
+            const latestIdsFromSource = Array.isArray(latestIdsData?.imdb_ids)
+              ? (latestIdsData.imdb_ids as string[]).filter(Boolean)
+              : [];
+            const latestFromSource = latestIdsFromSource.length
+              ? await getMoviesByImdbIds(latestIdsFromSource)
+              : [];
+            let nextLatest: Movie[] = [];
+            if (latestFromSource.length > 0) {
+              nextLatest = await fillToMinMovies(latestFromSource.slice(0, DISPLAY_COUNT), DISPLAY_COUNT);
+            } else {
+              const rawLatest = Array.isArray(fallbackLatestData?.movies) ? fallbackLatestData.movies : [];
+              nextLatest = await fillToMinMovies(rawLatest, DISPLAY_COUNT);
+            }
 
-        // Prevent repeat across homepage: Latest Movies should not reuse Suggestions movies.
-        nextLatest = nextLatest.filter((m) => {
-          const id = String(m?.imdb_id || "");
-          if (!id) return true;
-          return !usedMovieIds.has(id);
-        });
+            // Prevent repeat across homepage: Latest Movies should not reuse Suggestions movies.
+            nextLatest = nextLatest.filter((m) => {
+              const id = String(m?.imdb_id || "");
+              if (!id) return true;
+              return !usedMovieIds.has(id);
+            });
 
-        nextLatest = reorderMoviesByRefTitles(nextLatest, refLatestMovieTitles).slice(0, DISPLAY_COUNT);
-        nextLatest = fillWithAdventureUnique(nextLatest, adv?.movies || [], DISPLAY_COUNT, usedMovieIds);
-        setLatestMovies(nextLatest);
+            nextLatest = reorderMoviesByRefTitles(nextLatest, refLatestMovieTitles).slice(0, DISPLAY_COUNT);
+            nextLatest = fillWithAdventureUnique(nextLatest, adv?.movies || [], DISPLAY_COUNT, usedMovieIds);
+            setLatestMovies(nextLatest);
 
-        // Movies-home TV row: our data only, optionally reordered like reference titles.
-        const tvHomeRes = await fetchJsonCached(
-          `/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=first_air_date&sortOrder=desc`
-        ).catch(() => null);
-        let tvHome: any[] = tvHomeRes?.success && Array.isArray(tvHomeRes.data) ? tvHomeRes.data : [];
-        tvHome = reorderSeriesByRefTitles(tvHome, refLatestTvTitles).slice(0, DISPLAY_COUNT);
-        setHomeLatestTvSeries(tvHome);
+            // Movies-home TV row: our data only, optionally reordered like reference titles.
+            let tvHome: any[] = tvHomeRes?.success && Array.isArray(tvHomeRes.data) ? tvHomeRes.data : [];
+            tvHome = reorderSeriesByRefTitles(tvHome, refLatestTvTitles).slice(0, DISPLAY_COUNT);
+            setHomeLatestTvSeries(tvHome);
+          } catch {}
+        }, 0);
 
       } catch {}
       setLoading(false);

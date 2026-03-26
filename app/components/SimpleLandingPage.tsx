@@ -193,7 +193,7 @@ export default function SimpleLandingPage() {
         {/* Main Content */}
         <div className="prose prose-lg max-w-none">
           <h2 className="text-3xl font-bold text-gray-800 mb-6">
-            123Movies - Watch HD Movies Online Free | 123movie | 123 movies
+            123Movies - Watch HD Movies Online Free | 123movie | free streaming
           </h2>
 
           <div className="space-y-6 text-gray-700 leading-relaxed">
@@ -224,7 +224,7 @@ export default function SimpleLandingPage() {
               We stand out from other streaming websites as we don't require a subscription or account 
               to watch movies. We provide best quality videos for a great viewing experience. You will 
               have a great time watching the movies of your choice with no compromise in quality. 
-              Movies from many Genre. You can find movies without scrolling down a lot. We are 
+              Movies from many genres. You can find movies without scrolling down a lot. We are 
               non-region-specific.
             </p>
 
@@ -289,7 +289,7 @@ export default function SimpleLandingPage() {
               material through our normal contact or DMCA process.
             </p>
 
-            <h4 className="text-xl font-bold text-white mt-8 mb-3">
+            <h4 className="text-xl font-bold text-gray-800 mt-8 mb-3">
               September Update (2025)
             </h4>
 

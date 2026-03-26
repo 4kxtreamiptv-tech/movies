@@ -1,4 +1,4 @@
-import LandingVariant5 from "../components/LandingVariant5";
+import YesmoviesStyleLanding from "@/components/keyword-landings/YesmoviesStyleLanding";
 import type { Metadata } from "next";
 import { getCanonicalBase } from "@/lib/domain";
 
@@ -6,13 +6,14 @@ export async function generateMetadata(): Promise<Metadata> {
   const base = await getCanonicalBase();
   const url = `${base}/yesmovies`;
   return {
-    title: "Yesmovies - Free Online Movie Streaming in High Quality",
-    description: "Yesmovies provides free access to movies and TV series. Stream in HD with no buffering, no registration needed. Your ultimate movie streaming destination.",
-    keywords: "yesmovies, free streaming platform, HD movies, online series, movie streaming, watch free",
+    title: "Yesmovies search — movies & TV guide | our catalog",
+    description:
+      "Searched Yesmovies? Use our search, movies, and series pages—informational guide to this site’s catalog only.",
+    keywords: "yesmovies, movies online, tv series, catalog, browse, search",
     alternates: { canonical: url },
     openGraph: {
-      title: "Yesmovies - Free Online Movie Streaming in High Quality",
-      description: "Yesmovies provides free access to movies and TV series in HD quality.",
+      title: "Yesmovies search — movies & TV guide | our catalog",
+      description: "Guide to our movie site after a Yesmovies-related search.",
       type: "website",
       url,
     },
@@ -20,61 +21,61 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 const content = {
-  heading: "Yesmovies - Watch Free Movies and TV Shows Online",
+  heading: "Yesmovies — say yes to clear on-site browsing",
   intro: [
-    "Say yes to unlimited entertainment with Yesmovies! Our platform delivers an extensive collection of movies and TV series, all available to stream instantly and completely free. No registration required, no hidden fees – just straightforward access to thousands of hours of quality content.",
-    "Yesmovies makes streaming simple and enjoyable. Whether you're looking for the latest releases or want to revisit classic favorites, our well-organized library has you covered. Start watching within seconds and discover why millions choose Yesmovies for their entertainment needs."
+    "Yesmovies is a frequent search term; visitors who land here should know we are a standalone catalog with its own URLs and layout.",
+    "Search, Movies, and Series are the three pillars—combine them with genres or years when you explore.",
   ],
   sections: [
     {
-      title: "Why Choose Yesmovies",
+      title: "Disclaimer",
       paragraphs: [
-        "Yesmovies stands out as a reliable, user-friendly streaming platform that puts viewers first. We've eliminated all the frustrating barriers that plague other streaming sites. No forced sign-ups, no payment walls, no complicated navigation – just pure, uninterrupted entertainment available at your fingertips.",
-        "Our platform is built around you and your viewing preferences. The clean interface makes finding content effortless, while our powerful search functionality helps you locate specific titles in seconds. Yesmovies respects your time by providing direct access to what you want to watch."
-      ]
+        "We are not Yesmovies. Keyword in the heading reflects search intent, not ownership of a third-party trademark.",
+        "Trust only links that match our domain when you follow buttons from this page.",
+      ],
     },
     {
-      title: "Endless Entertainment Options",
+      title: "Discovery workflow",
       paragraphs: [
-        "Dive into a massive library featuring movies from every genre and era. Action-packed adventures, heartwarming romances, spine-tingling horrors, laugh-out-loud comedies – Yesmovies has it all. From Hollywood blockbusters to independent films, from mainstream hits to cult classics, our diverse collection ensures you'll never run out of options.",
-        "TV series enthusiasts will love our comprehensive collection of complete seasons. Binge-watch your favorite shows, discover new series to follow, or catch up on episodes you missed. Both ongoing series and completed shows are available, giving you the freedom to watch at your own pace."
-      ]
+        "Short on time? Search a specific title instead of endless grid scrolling.",
+        "Long evening? Pick a genre page and sample trailers or synopses before committing.",
+      ],
     },
     {
-      title: "High-Quality Streaming",
+      title: "Quality and access",
       paragraphs: [
-        "Enjoy movies and shows in excellent quality with Yesmovies. Our streams are optimized to deliver clear picture and crisp audio, ensuring an immersive viewing experience. We understand that quality matters, which is why we prioritize delivering the best possible streams for every title.",
-        "Smart adaptive streaming technology adjusts to your internet connection speed, preventing buffering while maintaining optimal quality. Whether you're on high-speed broadband or mobile data, Yesmovies provides smooth, consistent playback that keeps you engaged in the story."
-      ]
+        "Adaptive playback works best when the browser is updated and extensions are minimal.",
+        "Missing titles may be regional or not yet indexed—check back after catalog updates.",
+      ],
     },
     {
-      title: "Always Free, Always Accessible",
+      title: "Support the industry",
       paragraphs: [
-        "Yesmovies is committed to keeping entertainment free and accessible for everyone. No subscription fees today, tomorrow, or ever. No premium tiers or hidden costs. Everything you see on Yesmovies is available to watch immediately without spending a penny.",
-        "Access Yesmovies from any device with a web browser. Watch on your phone, tablet, laptop, or desktop – the platform works seamlessly across all devices. No apps to install, no compatibility issues to worry about. Just open your browser and start streaming instantly."
-      ]
-    }
-  ]
+        "Rentals, subscriptions, and cinema tickets keep productions funded.",
+        "This landing explains navigation; it is not a substitute for licensed services.",
+      ],
+    },
+  ],
 };
 
 const colorTheme = {
-  primary: '#f59e0b',      // Darker Amber - Better contrast
-  secondary: '#d97706',    // Amber-600
-  accent: '#b45309',       // Amber-700 - Much more readable
-  buttonBg: '#f59e0b',
-  buttonHover: '#d97706',
-  searchBorder: '#f59e0b',
-  searchFocus: '#d97706',
-  cardHover: '#f59e0b',
-  playButton: '#f59e0b',
-  textAccent: '#d97706'
+  primary: "#f59e0b",
+  secondary: "#d97706",
+  accent: "#b45309",
+  buttonBg: "#f59e0b",
+  buttonHover: "#d97706",
+  searchBorder: "#f59e0b",
+  searchFocus: "#d97706",
+  cardHover: "#f59e0b",
+  playButton: "#f59e0b",
+  textAccent: "#d97706",
 };
 
 export default function YesmoviesPage() {
   return (
-    <LandingVariant5
+    <YesmoviesStyleLanding
       keyword="Yesmovies"
-      description="Say Yes to Free Entertainment"
+      description="Guide: our movies & TV catalog (informational)"
       colorTheme={colorTheme}
       content={content}
     />

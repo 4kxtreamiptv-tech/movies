@@ -1,4 +1,4 @@
-export interface LandingColorTheme {
+export type LandingColorTheme = {
   primary: string;
   secondary: string;
   accent: string;
@@ -9,18 +9,24 @@ export interface LandingColorTheme {
   cardHover: string;
   playButton: string;
   textAccent: string;
-}
+};
 
-export interface LandingContentSection {
-  title: string;
-  paragraphs: string[];
-}
-
-export interface LandingContent {
+/** Flat article shape for OfficialBrandStyleLanding + legacy *StyleLanding (REFERENCE_EXPORT). */
+export type KeywordLandingContent = {
   heading: string;
   intro: string[];
-  sections: LandingContentSection[];
-}
+  sections: Array<{
+    title: string;
+    paragraphs: string[];
+  }>;
+};
+
+export type KeywordLandingProps = {
+  keyword: string;
+  description: string;
+  colorTheme: LandingColorTheme;
+  content: KeywordLandingContent;
+};
 
 export type OfficialStylePreset =
   | "m123"
@@ -55,5 +61,5 @@ export interface ExtendedLandingConfig {
   keywords: string;
   preset: OfficialStylePreset;
   colorTheme: LandingColorTheme;
-  content: LandingContent;
+  content: KeywordLandingContent;
 }
