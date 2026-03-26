@@ -13,6 +13,7 @@ import { generateMovieUrl } from "@/lib/slug";
 import { getTVImageUrl } from "@/api/tmdb-tv";
 import SiteLogo from "@/components/SiteLogo";
 import { resolvePosterUrl } from "@/lib/poster";
+import homeSnapshot from "@/data/homeSnapshot.json";
 
 const jsonCache = new Map<string, Promise<any>>();
 const fetchJsonCached = (url: string) => {
@@ -675,113 +676,25 @@ export default function HomePage() {
     initialDataLoadedRef.current = true;
     (async () => {
       try {
-        // Stage 1 (fast): render suggestions quickly from local API.
-        const quickSuggestionsData = await fetchJsonCached(
-          `/api/movies/latest?category=suggestions&limit=${Math.max(FAST_COUNT, 8)}`
-        ).catch(() => null);
-        const quickRaw = Array.isArray(quickSuggestionsData?.movies) ? quickSuggestionsData.movies : [];
-        const quickSuggestions = await fillToMinMovies(quickRaw, FAST_COUNT);
-        if (quickSuggestions.length > 0) {
-          setAllMovies(quickSuggestions);
-          setCategories((prev) => ({ ...prev, Suggestions: quickSuggestions }));
-        }
-        setLoading(false);
+        // 0 API calls on homepage load:
+        // Use pre-saved snapshot from repo (updated via UPDATE_HOME / home:snapshot:update).
+        const snapshot: any = homeSnapshot as any;
 
-        // Stage 2 (background): enrich with reference ordering and full rows.
-        const [referenceHome, adv, mappedData, fallbackSuggestionsData] = await Promise.all([
-          fetch(`/api/reference/home`)
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null),
-          fetch(`/api/movies/genre?genreId=12&limit=${DISPLAY_COUNT * 3}&page=1`)
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null),
-          fetchJsonCached(`/api/reference/home-mapped`).catch(() => null),
-          fetchJsonCached(`/api/movies/latest?category=suggestions&limit=${DISPLAY_COUNT}`).catch(() => null),
-        ]);
-        const refSuggestionTitles = Array.isArray(referenceHome?.suggestions)
-          ? referenceHome.suggestions.map((x: { title?: string }) => String(x?.title || "").trim()).filter(Boolean)
-          : [];
-        const refLatestMovieTitles = Array.isArray(referenceHome?.latestMovies)
-          ? referenceHome.latestMovies.map((x: { title?: string }) => String(x?.title || "").trim()).filter(Boolean)
-          : [];
-        const refLatestTvTitles = Array.isArray(referenceHome?.latestTvSeries)
-          ? referenceHome.latestTvSeries.map((x: { title?: string }) => String(x?.title || "").trim()).filter(Boolean)
-          : [];
-
-        if (Array.isArray(adv?.movies)) {
-          setAdventureFallbackMovies(adv.movies);
+        const suggestions = Array.isArray(snapshot?.suggestions) ? snapshot.suggestions : [];
+        if (suggestions.length > 0) {
+          // Full list (>= DISPLAY_COUNT). UI will show 8 first via fastFirstPaint.
+          setAllMovies(suggestions.slice(0, DISPLAY_COUNT));
+          setCategories((prev) => ({ ...prev, Suggestions: suggestions.slice(0, DISPLAY_COUNT) }));
         }
 
-        // Category-by-category loading: render Suggestions first for faster first paint.
+        const latest = Array.isArray(snapshot?.latestMovies) ? snapshot.latestMovies : [];
+        setLatestMovies(latest.slice(0, DISPLAY_COUNT));
 
-        const suggestionsIds = (mappedData?.suggestionsImdbIds || []) as string[];
-        const suggestionsFromStore = suggestionsIds.length
-          ? (await getMoviesByImdbIds(suggestionsIds)).slice(0, DISPLAY_COUNT)
-          : [];
-
-        const rawSuggestions =
-          suggestionsFromStore.length > 0
-            ? suggestionsFromStore
-            : (Array.isArray(fallbackSuggestionsData.movies) ? fallbackSuggestionsData.movies : []);
-        let finalSuggestions = await fillToMinMovies(rawSuggestions, DISPLAY_COUNT);
-        finalSuggestions = reorderMoviesByRefTitles(finalSuggestions, refSuggestionTitles).slice(0, DISPLAY_COUNT);
-        finalSuggestions = fillWithAdventureUnique(finalSuggestions, adv?.movies || [], DISPLAY_COUNT);
-
-        const usedMovieIds = new Set<string>(
-          finalSuggestions
-            .map((m) => String(m?.imdb_id || ""))
-            .filter((id) => !!id)
-        );
-
-        setAllMovies(finalSuggestions);
-        setCategories((prev) => ({ ...prev, Suggestions: finalSuggestions }));
-        // Promote full grid after initial fast paint.
-        setTimeout(() => setFastFirstPaint(false), 300);
-
-        // Non-critical sections are deferred to avoid slowing first paint.
-        setTimeout(async () => {
-          try {
-            const [latestIdsData, fallbackLatestData, tvHomeRes] = await Promise.all([
-              fetchJsonCached(`/api/movies/list?offset=0&limit=${DISPLAY_COUNT * 2}&order=desc`).catch(() => null),
-              fetchJsonCached(`/api/movies/latest?category=latest&limit=${DISPLAY_COUNT}`).catch(() => null),
-              fetchJsonCached(`/api/tv-series-db?limit=${DISPLAY_COUNT}&sortBy=first_air_date&sortOrder=desc`).catch(() => null),
-            ]);
-            const latestIdsFromSource = Array.isArray(latestIdsData?.imdb_ids)
-              ? (latestIdsData.imdb_ids as string[]).filter(Boolean)
-              : [];
-            const latestFromSource = latestIdsFromSource.length
-              ? await getMoviesByImdbIds(latestIdsFromSource)
-              : [];
-            let nextLatest: Movie[] = [];
-            if (latestFromSource.length > 0) {
-              nextLatest = await fillToMinMovies(latestFromSource.slice(0, DISPLAY_COUNT), DISPLAY_COUNT);
-            } else {
-              const rawLatest = Array.isArray(fallbackLatestData?.movies) ? fallbackLatestData.movies : [];
-              nextLatest = await fillToMinMovies(rawLatest, DISPLAY_COUNT);
-            }
-
-            // Prevent repeat across homepage: Latest Movies should not reuse Suggestions movies.
-            nextLatest = nextLatest.filter((m) => {
-              const id = String(m?.imdb_id || "");
-              if (!id) return true;
-              return !usedMovieIds.has(id);
-            });
-
-            nextLatest = reorderMoviesByRefTitles(nextLatest, refLatestMovieTitles).slice(0, DISPLAY_COUNT);
-            nextLatest = fillWithAdventureUnique(nextLatest, adv?.movies || [], DISPLAY_COUNT, usedMovieIds);
-            setLatestMovies(nextLatest);
-
-            // Movies-home TV row: our data only, optionally reordered like reference titles.
-            let tvHome: any[] = tvHomeRes?.success && Array.isArray(tvHomeRes.data) ? tvHomeRes.data : [];
-            tvHome = pickRenderableTvSeries(tvHome, DISPLAY_COUNT * 3);
-            tvHome = reorderSeriesByRefTitles(tvHome, refLatestTvTitles);
-            tvHome = pickRenderableTvSeries(tvHome, DISPLAY_COUNT);
-            setHomeLatestTvSeries(tvHome);
-          } catch {}
-        }, 0);
-
+        const tvHome = Array.isArray(snapshot?.homeLatestTvSeries) ? snapshot.homeLatestTvSeries : [];
+        setHomeLatestTvSeries(tvHome.slice(0, DISPLAY_COUNT));
       } catch {}
       setLoading(false);
+      setTimeout(() => setFastFirstPaint(false), 300);
     })();
   }, []);
 

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { searchMoviesByTitle } from "@/api/tmdb";
 import fs from "fs";
 import path from "path";
+import { VID_SRC_LATEST_MOVIES } from "@/data/vidsrcLatestMovies";
 
 type Payload = {
   source: string;
@@ -10,72 +10,83 @@ type Payload = {
   latestMoviesImdbIds: string[];
 };
 
-const SOURCE_URL = "https://ww8.123moviesfree.net/home/";
-
 let cache: { at: number; data: Payload } | null = null;
-// Cache reference homepage mapping for 7 days in-memory
-const TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Refresh reference-home mapping at most once per 24 hours
+const TTL_MS = 24 * 60 * 60 * 1000;
 const LIMIT = 12;
 const DISK_FILE = path.join(process.cwd(), "app", "data", "referenceHomeMapped.json");
 
-function extractTitles(html: string, sectionTitle: string, limit: number): string[] {
-  const marker = `<div class="fs-6 list-title">${sectionTitle}</div>`;
-  const start = html.indexOf(marker);
-  if (start === -1) return [];
-  const after = html.slice(start + marker.length);
-  const next = after.indexOf(`<div class="fs-6 list-title">`);
-  const sectionHtml = next === -1 ? after : after.slice(0, next);
+// We use our local "latest" catalog to decide if stored mapping is still useful.
+// If mapping doesn't point to anything we currently have, treat it as stale and refresh from source.
+const LOCAL_LATEST_IMDB_SET = new Set(
+  VID_SRC_LATEST_MOVIES.map((m) => String(m?.imdb_id || "").trim()).filter(Boolean)
+);
 
-  const titles: string[] = [];
-  const altRe = /alt="([^"]+)"/gi;
-  let m: RegExpExecArray | null;
-  while ((m = altRe.exec(sectionHtml))) {
-    const title = (m[1] || "").trim();
-    if (!title) continue;
-    if (!titles.includes(title)) titles.push(title);
-    if (titles.length >= limit) break;
+function countIntersection(a: string[] | undefined, localSet: Set<string>) {
+  if (!Array.isArray(a) || a.length === 0) return 0;
+  let c = 0;
+  for (const id of a) {
+    const t = String(id || "").trim();
+    if (t && localSet.has(t)) c++;
   }
-  return titles;
+  return c;
 }
 
-async function mapTitlesToImdbIds(titles: string[]): Promise<string[]> {
-  const concurrency = 4;
-  const out = new Array<string | null>(titles.length).fill(null);
-  let idx = 0;
+function buildFromVidsrc(limit: number): Payload {
+  const sorted = [...(VID_SRC_LATEST_MOVIES || [])].sort((a, b) =>
+    String(b.time_added || "").localeCompare(String(a.time_added || ""))
+  );
 
-  const worker = async () => {
-    while (idx < titles.length) {
-      const myIdx = idx++;
-      const title = titles[myIdx];
-      try {
-        const r = await searchMoviesByTitle(title, 1);
-        const imdb = r?.[0]?.imdb_id;
-        if (imdb && typeof imdb === "string" && imdb.trim()) out[myIdx] = imdb;
-      } catch {
-        // ignore
-      }
-    }
+  const ids = sorted
+    .map((m) => String(m?.imdb_id || "").trim())
+    .filter(Boolean);
+
+  const latestMoviesImdbIds = Array.from(new Set(ids)).slice(0, limit);
+  const suggestionsImdbIds = latestMoviesImdbIds.slice(0, limit);
+
+  return {
+    source: "vidsrc-latest",
+    fetchedAt: new Date().toISOString(),
+    suggestionsImdbIds,
+    latestMoviesImdbIds,
   };
-
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
-  return out.filter((x): x is string => !!x);
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  let diskDataFallback: Payload | null = null;
   try {
+    const { searchParams } = new URL(request.url);
+
     // Optional: force refresh only when explicitly requested.
     // Default behavior is storage-first to avoid expensive remapping/searching.
     const shouldRefresh =
-      process.env.REF_HOME_REFRESH_ON_REQUEST === "1";
+      process.env.REF_HOME_REFRESH_ON_REQUEST === "1" || searchParams.get("refresh") === "1";
 
     // 0) Local disk cache (for dev): if file exists, use it and DO NOT re-search.
     try {
       if (!shouldRefresh && fs.existsSync(DISK_FILE)) {
+        // Disk file can live long; treat it as stale after TTL_MS.
         const raw = fs.readFileSync(DISK_FILE, "utf8");
         const diskData = JSON.parse(raw) as Payload;
-        return NextResponse.json(diskData, {
-          headers: { "Cache-Control": "public, max-age=600" },
-        });
+        diskDataFallback = diskData;
+
+        const fetchedAtTs = Number(new Date(diskData?.fetchedAt || 0).getTime());
+        const mtimeMs = fs.statSync(DISK_FILE).mtimeMs;
+        const diskAgeMs = Number.isFinite(fetchedAtTs) && fetchedAtTs > 0 ? Date.now() - fetchedAtTs : Date.now() - mtimeMs;
+
+        if (diskAgeMs >= 0 && diskAgeMs < TTL_MS) {
+          // If disk mapping has NO overlap with our local latest catalog,
+          // assume source changed and re-map (avoid showing totally unrelated items).
+          const overlap =
+            countIntersection(diskData?.latestMoviesImdbIds, LOCAL_LATEST_IMDB_SET) +
+            countIntersection(diskData?.suggestionsImdbIds, LOCAL_LATEST_IMDB_SET);
+
+          if (overlap > 0) {
+            return NextResponse.json(diskData, {
+              headers: { "Cache-Control": "public, max-age=86400" },
+            });
+          }
+        }
       }
     } catch {
       // ignore disk errors; we'll fall back to in-memory / live fetch
@@ -83,7 +94,7 @@ export async function GET() {
 
     if (!shouldRefresh && cache && Date.now() - cache.at < TTL_MS) {
       return NextResponse.json(cache.data, {
-        headers: { "Cache-Control": "public, max-age=600" },
+        headers: { "Cache-Control": "public, max-age=86400" },
       });
     }
 
@@ -97,37 +108,7 @@ export async function GET() {
         { status: 404 }
       );
     }
-
-    const res = await fetch(SOURCE_URL, {
-      cache: "no-store",
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (compatible; movies-site-bot/1.0; +https://example.invalid)",
-        Accept: "text/html",
-      },
-    });
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: `Failed to fetch source: ${res.status}` },
-        { status: 502 }
-      );
-    }
-    const html = await res.text();
-
-    const suggestionsTitles = extractTitles(html, "Suggestions", LIMIT);
-    const latestTitles = extractTitles(html, "Latest Movies", LIMIT);
-
-    const [suggestionsImdbIds, latestMoviesImdbIds] = await Promise.all([
-      mapTitlesToImdbIds(suggestionsTitles),
-      mapTitlesToImdbIds(latestTitles),
-    ]);
-
-    const data: Payload = {
-      source: SOURCE_URL,
-      fetchedAt: new Date().toISOString(),
-      suggestionsImdbIds,
-      latestMoviesImdbIds,
-    };
+    const data: Payload = buildFromVidsrc(LIMIT);
 
     cache = { at: Date.now(), data };
 
@@ -144,10 +125,12 @@ export async function GET() {
     });
   } catch (e) {
     console.error("Error in /api/reference/home-mapped:", e);
-    return NextResponse.json(
-      { error: "Failed to map reference home" },
-      { status: 500 }
-    );
+    if (diskDataFallback) {
+      return NextResponse.json(diskDataFallback, {
+        headers: { "Cache-Control": "public, max-age=300" },
+      });
+    }
+    return NextResponse.json({ error: "Failed to map reference home" }, { status: 500 });
   }
 }
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCachedMoviesData } from '@/lib/serverMovieCache';
+import { VID_SRC_LATEST_MOVIES } from '@/data/vidsrcLatestMovies';
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,21 +16,45 @@ export async function GET(request: NextRequest) {
       });
     }
     const allMovies = moviesData.allMovies;
+    const byImdbId = moviesData.byImdbId;
 
     // Get latest movies based on category
     let selectedMovies: any[] = [];
 
     switch (category) {
       case 'suggestions':
-        // Latest movies with good ratings (most recent first)
-        selectedMovies = allMovies
-          .filter(movie => movie.vote_average && movie.vote_average > 6)
-          .slice(0, limit);
+        // Homepage requirement: show RECENT-ADDED from our source (VidSrc).
+        if (Array.isArray(VID_SRC_LATEST_MOVIES) && VID_SRC_LATEST_MOVIES.length) {
+          const ids = [...VID_SRC_LATEST_MOVIES]
+            .sort((a, b) => String(b.time_added || '').localeCompare(String(a.time_added || '')))
+            .map((m) => String(m.imdb_id || '').trim())
+            .filter(Boolean);
+          // Only map what we need (allow some slack for missing IDs).
+          const candidateIds = ids.slice(0, Math.max(limit * 5, 40));
+          const mapped = candidateIds.map((id) => byImdbId.get(id)).filter(Boolean);
+          selectedMovies = mapped.slice(0, limit);
+        }
+        if (selectedMovies.length === 0) {
+          // Fallback: dataset ordering
+          selectedMovies = allMovies.slice(0, limit);
+        }
         break;
         
       case 'latest':
-        // Latest movies overall (already sorted newest-first)
-        selectedMovies = allMovies.slice(0, limit);
+        // Show what's most recently added in VidSrc source first.
+        if (Array.isArray(VID_SRC_LATEST_MOVIES) && VID_SRC_LATEST_MOVIES.length) {
+          const ids = [...VID_SRC_LATEST_MOVIES]
+            .sort((a, b) => String(b.time_added || '').localeCompare(String(a.time_added || '')))
+            .map((m) => String(m.imdb_id || '').trim())
+            .filter(Boolean);
+          const candidateIds = ids.slice(0, Math.max(limit * 5, 40));
+          const mapped = candidateIds.map((id) => byImdbId.get(id)).filter(Boolean);
+          selectedMovies = mapped.slice(0, limit);
+        }
+        if (selectedMovies.length === 0) {
+          // Fallback to generated dataset ordering
+          selectedMovies = allMovies.slice(0, limit);
+        }
         break;
         
       case 'trending':

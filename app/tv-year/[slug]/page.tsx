@@ -55,7 +55,10 @@ export default function TVYearPage() {
       first_air_date: data.first_air_date,
       vote_average: data.vote_average || 0,
       number_of_seasons: data.number_of_seasons || data.seasons?.length || 0,
-      episodeCount: data.seasons?.reduce((sum: number, season: any) => sum + season.episodes.length, 0) || 0
+      episodeCount:
+        Number(data.number_of_episodes || 0) ||
+        data.seasons?.reduce((sum: number, season: any) => sum + (season?.episodes?.length || 0), 0) ||
+        0
           }));
           
           setAllSeriesData(seriesData);
@@ -148,9 +151,11 @@ export default function TVYearPage() {
                         className="object-cover group-hover:scale-105 transition-transform duration-200"
                       />
                       {/* Episode Count Badge */}
-                      <div className="absolute top-2 right-2 bg-black bg-opacity-80 text-white text-xs px-2 py-1 rounded">
-                        {series.episodeCount} eps
-                      </div>
+                      {series.episodeCount > 0 && (
+                        <div className="absolute top-2 right-2 bg-black bg-opacity-80 text-white text-xs px-2 py-1 rounded">
+                          {series.episodeCount} eps
+                        </div>
+                      )}
                       {/* Year Badge */}
                       <div className="absolute top-2 left-2 bg-purple-600 bg-opacity-90 text-white text-xs px-2 py-1 rounded">
                         {year}

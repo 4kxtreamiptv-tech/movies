@@ -3,6 +3,7 @@ import path from "path";
 
 type CachedMoviesState = {
   allMovies: any[];
+  byImdbId: Map<string, any>;
   latestYear: number | null;
   fingerprint: string;
   cachedAt: number;
@@ -89,6 +90,7 @@ export function getCachedMoviesData() {
     return {
       available: true,
       allMovies: cacheState.allMovies,
+      byImdbId: cacheState.byImdbId,
       latestYear: cacheState.latestYear,
     };
   }
@@ -110,9 +112,16 @@ export function getCachedMoviesData() {
 
   sortMovies(allMovies);
   const latestYear = allMovies.length > 0 ? Math.max(...allMovies.map((m) => m.year)) : null;
+  const byImdbId = new Map<string, any>();
+  for (const m of allMovies) {
+    const key = typeof m.imdb_id === "string" ? m.imdb_id.trim() : "";
+    if (!key) continue;
+    if (!byImdbId.has(key)) byImdbId.set(key, m);
+  }
 
   cacheState = {
     allMovies,
+    byImdbId,
     latestYear,
     fingerprint,
     cachedAt: now,
@@ -121,6 +130,7 @@ export function getCachedMoviesData() {
   return {
     available: true,
     allMovies,
+    byImdbId,
     latestYear,
   };
 }

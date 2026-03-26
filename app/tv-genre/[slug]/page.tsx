@@ -54,7 +54,10 @@ export default function TVGenrePage() {
           first_air_date: series.first_air_date,
           vote_average: series.vote_average || 0,
           number_of_seasons: series.number_of_seasons || series.seasons?.length || 0,
-          episodeCount: series.seasons?.reduce((sum: number, season: any) => sum + season.episodes.length, 0) || 0
+          episodeCount:
+            Number(series.number_of_episodes || 0) ||
+            series.seasons?.reduce((sum: number, season: any) => sum + (season?.episodes?.length || 0), 0) ||
+            0
         }));
         
         if (skip === 0) {
@@ -168,9 +171,11 @@ export default function TVGenrePage() {
                         className="object-cover group-hover:scale-105 transition-transform duration-200"
                       />
                       {/* Episode Count Badge */}
-                      <div className="absolute top-2 right-2 bg-black bg-opacity-80 text-white text-xs px-2 py-1 rounded">
-                        {series.episodeCount} eps
-                      </div>
+                      {series.episodeCount > 0 && (
+                        <div className="absolute top-2 right-2 bg-black bg-opacity-80 text-white text-xs px-2 py-1 rounded">
+                          {series.episodeCount} eps
+                        </div>
+                      )}
                       {/* Genre Badge */}
                       <div className="absolute top-2 left-2 bg-purple-600 bg-opacity-90 text-white text-xs px-2 py-1 rounded">
                         {genre.name}

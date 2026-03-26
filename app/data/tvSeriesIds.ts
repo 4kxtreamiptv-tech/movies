@@ -1,7 +1,7 @@
 // TV Series IDs from VidSrc
-// Total: 19340 series
+// Total: 19341 series
 // Source: https://vidsrc.me/ids/tv_imdb.txt
-// Last updated: 2026-03-26T19:12:42.463Z
+// Last updated: 2026-03-26T22:37:05.062Z
 
 export const TV_SERIES_IDS = [
   'tt0041038',
@@ -16270,6 +16270,7 @@ export const TV_SERIES_IDS = [
   'tt27788849',
   'tt27789140',
   'tt27789275',
+  'tt27789959',
   'tt27790101',
   'tt27790130',
   'tt27790155',

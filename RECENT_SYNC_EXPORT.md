@@ -146,61 +146,18 @@ Benefit:
 
 ---
 
-## 9) Local automation (Windows)
+## 9) Daily run (local)
 
-Optional local daily task command used:
-
-```bat
-schtasks /Create /SC DAILY /MO 1 /TN "MovieSiteDailySync" /TR "cmd /c cd /d d:\moviessite-main\moviessite-main && npm run sync:daily:check >> d:\moviessite-main\moviessite-main\sync-daily.log 2>&1" /ST 03:00 /F
-```
-
-Note:
-
-- This works on local Windows machine.
-- It is not Vercel cron.
-
----
-
-## 10) Porting checklist for another website
-
-1. Copy `scripts/daily-sync.js`.
-2. Add npm scripts from section 4.
-3. Add/create data files:
-   - `app/data/vidsrcLatestMovies.ts`
-   - `app/data/tvSeriesIds.ts`
-4. Implement/port `app/api/movies/list/route.ts`.
-5. Ensure homepage reads latest rows from `/api/movies/list`.
-6. Add fast-first strategy and `w342` posters on homepage grid.
-7. Add TV unique-bucket helpers:
-   - `tvUniqKey`
-   - `pickRenderableTvSeries`
-   - `pickUniqueTvSeries`
-8. Use one latest TV feed and split unique categories in UI.
-9. Test:
-   - first load speed
-   - no duplicate TV entries across three sections
-   - sync command updates generated file
-
----
-
-## 11) Run / verify commands
+Roz 1 dafa run karne ke liye:
 
 ```bash
 npm run sync:daily:check
-npm run dev
 ```
 
-Quick check endpoints:
+Phir homepage refresh karke check kar lo ke `Latest Movies` aur `Latest/Popular/Featured TV-Series` latest items se updated hain.
 
-```bash
-http://localhost:3000/api/movies/list?offset=0&limit=20&order=desc
-http://localhost:3000/api/tv-series-db?limit=100&sortBy=first_air_date&sortOrder=desc
-```
+## 10) Kis cheez ko update karta hai
 
----
-
-## 12) Notes
-
-- This setup is built for **latest-first data ingestion** and fast homepage rendering.
-- If moving to serverless production (e.g. Vercel), prefer DB/KV persistence over runtime file writes.
+- `app/data/vidsrcLatestMovies.ts` (movies latest list)
+- `app/data/tvSeriesIds.ts` (TV ids list)
 
