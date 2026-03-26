@@ -48,11 +48,11 @@ const fillToMinMovies = async (input: Movie[], minCount: number): Promise<Movie[
 const getMovieCardPoster = (movie: Movie): string => {
   const raw = String(movie?.poster_path || "").trim();
   if (!raw) return "/placeholder.svg";
-  return resolvePosterUrl(raw, "w500");
+  return resolvePosterUrl(raw, "w342");
 };
 
 const getTvCardPoster = (series: any): string => {
-  if (series?.poster_path) return getTVImageUrl(series.poster_path, "w500");
+  if (series?.poster_path) return getTVImageUrl(series.poster_path, "w342");
   return "/placeholder.svg";
 };
 
@@ -165,6 +165,49 @@ function reorderSeriesByRefTitles(series: any[], refTitles: string[]): any[] {
   }
   // Append remaining series as-is (no fuzzy selection) to keep grid filled.
   for (const s of pool) if (!used.has(s)) out.push(s);
+  return out;
+}
+
+function pickRenderableTvSeries(series: any[], count: number): any[] {
+  if (!Array.isArray(series) || series.length === 0) return [];
+  const scored = series
+    .filter((s) => {
+      const name = String(s?.name || s?.title || "").trim();
+      return Boolean(name);
+    })
+    .map((s) => ({
+      item: s,
+      // Prefer cards with real posters and useful metadata.
+      score:
+        (s?.poster_path ? 4 : 0) +
+        (s?.backdrop_path ? 2 : 0) +
+        (Number(s?.vote_average || 0) > 0 ? 1 : 0) +
+        (s?.first_air_date ? 1 : 0),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.item);
+
+  return scored.slice(0, count);
+}
+
+function tvUniqKey(s: any): string {
+  const id = String(s?.tmdb_id || s?.tmdbId || s?.imdb_id || s?.imdbId || "").trim();
+  const name = normalizeTitleKey(String(s?.name || s?.title || "").trim());
+  const year = String(s?.first_air_date || "").slice(0, 4);
+  if (id) return `id:${id}`;
+  return `name:${name}|year:${year}`;
+}
+
+function pickUniqueTvSeries(series: any[], count: number, excludeIds: Set<string> = new Set()): any[] {
+  const out: any[] = [];
+  const seen = new Set<string>(excludeIds);
+  for (const s of pickRenderableTvSeries(series, series.length)) {
+    const key = tvUniqKey(s);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= count) break;
+  }
   return out;
 }
 
@@ -560,7 +603,9 @@ export default function HomePage() {
   const [featuredTvSeries, setFeaturedTvSeries] = useState<any[]>([]);
   const [adventureFallbackMovies, setAdventureFallbackMovies] = useState<Movie[]>([]);
   const [itemsPerRow, setItemsPerRow] = useState(12);
+  const [fastFirstPaint, setFastFirstPaint] = useState(true);
   const DISPLAY_COUNT = 16;
+  const FAST_COUNT = 8;
   // Match reference layout: 2 / 4 / 6 / 8 cards per row.
   const homeGridClass =
     "grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-3";
@@ -630,7 +675,19 @@ export default function HomePage() {
     initialDataLoadedRef.current = true;
     (async () => {
       try {
-        // Keep first visit fast: fetch critical sources in parallel.
+        // Stage 1 (fast): render suggestions quickly from local API.
+        const quickSuggestionsData = await fetchJsonCached(
+          `/api/movies/latest?category=suggestions&limit=${Math.max(FAST_COUNT, 8)}`
+        ).catch(() => null);
+        const quickRaw = Array.isArray(quickSuggestionsData?.movies) ? quickSuggestionsData.movies : [];
+        const quickSuggestions = await fillToMinMovies(quickRaw, FAST_COUNT);
+        if (quickSuggestions.length > 0) {
+          setAllMovies(quickSuggestions);
+          setCategories((prev) => ({ ...prev, Suggestions: quickSuggestions }));
+        }
+        setLoading(false);
+
+        // Stage 2 (background): enrich with reference ordering and full rows.
         const [referenceHome, adv, mappedData, fallbackSuggestionsData] = await Promise.all([
           fetch(`/api/reference/home`)
             .then((r) => (r.ok ? r.json() : null))
@@ -678,7 +735,8 @@ export default function HomePage() {
 
         setAllMovies(finalSuggestions);
         setCategories((prev) => ({ ...prev, Suggestions: finalSuggestions }));
-        setLoading(false);
+        // Promote full grid after initial fast paint.
+        setTimeout(() => setFastFirstPaint(false), 300);
 
         // Non-critical sections are deferred to avoid slowing first paint.
         setTimeout(async () => {
@@ -715,7 +773,9 @@ export default function HomePage() {
 
             // Movies-home TV row: our data only, optionally reordered like reference titles.
             let tvHome: any[] = tvHomeRes?.success && Array.isArray(tvHomeRes.data) ? tvHomeRes.data : [];
-            tvHome = reorderSeriesByRefTitles(tvHome, refLatestTvTitles).slice(0, DISPLAY_COUNT);
+            tvHome = pickRenderableTvSeries(tvHome, DISPLAY_COUNT * 3);
+            tvHome = reorderSeriesByRefTitles(tvHome, refLatestTvTitles);
+            tvHome = pickRenderableTvSeries(tvHome, DISPLAY_COUNT);
             setHomeLatestTvSeries(tvHome);
           } catch {}
         }, 0);
@@ -723,6 +783,12 @@ export default function HomePage() {
       } catch {}
       setLoading(false);
     })();
+  }, []);
+
+  useEffect(() => {
+    // Safety: in case background stage takes long, still switch to full count.
+    const t = setTimeout(() => setFastFirstPaint(false), 2500);
+    return () => clearTimeout(t);
   }, []);
 
   useEffect(() => {
@@ -735,22 +801,35 @@ export default function HomePage() {
 
     (async () => {
       try {
-        // Load latest first for faster first paint; fetch other sections in parallel without heavy enrichment.
-        const latestTvData = await fetchJsonCached(
-          `/api/tv-series-db?limit=12&sortBy=first_air_date&sortOrder=desc`
+        // Fast strategy: one latest feed, then split into unique buckets.
+        // No strict minRating filters to avoid 50-90s API latency.
+        const tvData = await fetchJsonCached(
+          `/api/tv-series-db?limit=220&skip=0&sortBy=first_air_date&sortOrder=desc`
         );
 
-        if (latestTvData?.success && Array.isArray(latestTvData.data)) {
-          setLatestTvSeries(latestTvData.data);
-        }
+        const pool =
+          tvData?.success && Array.isArray(tvData.data)
+            ? pickRenderableTvSeries(tvData.data, 220)
+            : [];
 
-        const [popularTvData, featuredTvData] = await Promise.all([
-          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=vote_average&sortOrder=desc&minRating=7.0`),
-          fetchJsonCached(`/api/tv-series-db?limit=12&sortBy=vote_average&sortOrder=desc&minRating=8.0`),
+        const latestList = pickUniqueTvSeries(pool, DISPLAY_COUNT);
+        const latestKeys = new Set(latestList.map((s) => tvUniqKey(s)).filter(Boolean));
+
+        const popularList = pickUniqueTvSeries(pool, DISPLAY_COUNT, latestKeys);
+        const usedAfterPopular = new Set([
+          ...latestKeys,
+          ...popularList.map((s) => tvUniqKey(s)).filter(Boolean),
         ]);
 
-        if (popularTvData?.success && Array.isArray(popularTvData.data)) setPopularTvSeries(popularTvData.data);
-        if (featuredTvData?.success && Array.isArray(featuredTvData.data)) setFeaturedTvSeries(featuredTvData.data);
+        let featuredList = pickUniqueTvSeries(pool, DISPLAY_COUNT, usedAfterPopular);
+        if (featuredList.length < DISPLAY_COUNT) {
+          // Keep section non-empty even when source pool is small.
+          featuredList = pickRenderableTvSeries(pool, DISPLAY_COUNT);
+        }
+
+        setLatestTvSeries(latestList);
+        setPopularTvSeries(popularList);
+        setFeaturedTvSeries(featuredList);
       } catch {}
     })();
   }, [currentMode, latestTvSeries.length, popularTvSeries.length, featuredTvSeries.length]);
@@ -998,7 +1077,7 @@ export default function HomePage() {
                 </div>
                 {loading ? (
                   <div className={homeGridClass}>
-                    {Array.from({ length: DISPLAY_COUNT }).map((_, i) => (
+                    {Array.from({ length: FAST_COUNT }).map((_, i) => (
                       <div key={i} className="bg-white rounded shadow overflow-hidden">
                         <div className="aspect-[2/3] bg-gray-200 animate-pulse" />
                         <div className="h-8 bg-black/80" />
@@ -1007,7 +1086,7 @@ export default function HomePage() {
                   </div>
                 ) : (
                   <div className={homeGridClass}>
-                    {allMovies.slice(0, DISPLAY_COUNT).map((movie: Movie, index: number) => (
+                    {allMovies.slice(0, fastFirstPaint ? FAST_COUNT : DISPLAY_COUNT).map((movie: Movie, index: number) => (
                       <Link
                         key={`${String(movie.imdb_id ?? index)}-${index}`}
                         href={generateMovieUrl(movie.title, movie.imdb_id)}
@@ -1046,7 +1125,7 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div className={homeGridClass}>
-                  {(latestMovies || []).slice(0, DISPLAY_COUNT).map((movie: Movie, index: number) => (
+                  {(latestMovies || []).slice(0, fastFirstPaint ? FAST_COUNT : DISPLAY_COUNT).map((movie: Movie, index: number) => (
                     <Link
                       key={`latest-m-${String(movie.imdb_id ?? index)}-${index}`}
                       href={generateMovieUrl(movie.title, movie.imdb_id)}
@@ -1084,7 +1163,7 @@ export default function HomePage() {
                   </div>
                 </div>
                 <div className={homeGridClass}>
-                  {homeLatestTvSeries.slice(0, DISPLAY_COUNT).map((series: any, index: number) => {
+                  {homeLatestTvSeries.slice(0, fastFirstPaint ? FAST_COUNT : DISPLAY_COUNT).map((series: any, index: number) => {
                     const name = series.name || series.title || `TV Series ${series.imdb_id || series.tmdb_id || index}`;
                     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
                     const href = `/${slug}-${series.tmdb_id || series.tmdbId || series.imdb_id || series.imdbId || ""}`;

@@ -1,0 +1,218 @@
+const fs = require("fs");
+const path = require("path");
+
+async function getJson(url) {
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+  return res.json();
+}
+
+async function getText(url) {
+  const res = await fetch(url, { headers: { Accept: "text/plain" } });
+  if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+  return res.text();
+}
+
+function writeSafe(filePath, content) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(filePath, content, "utf8");
+}
+
+function readExistingMoviesFromTs() {
+  try {
+    const target = path.join(process.cwd(), "app", "data", "vidsrcLatestMovies.ts");
+    if (!fs.existsSync(target)) return [];
+    const raw = fs.readFileSync(target, "utf8");
+    const match = raw.match(/VID_SRC_LATEST_MOVIES:\s*VidsrcLatestMovie\[\]\s*=\s*(\[[\s\S]*?\]);/);
+    if (!match?.[1]) return [];
+    const arr = Function(`"use strict"; return (${match[1]});`)();
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseArgs(argv) {
+  const args = {
+    recentOnly: false,
+    pages: 6,
+    batch: 5,
+    watchMinutes: 0,
+    skipTv: false,
+  };
+
+  for (const raw of argv) {
+    const arg = String(raw).trim();
+    if (arg === "--recent") args.recentOnly = true;
+    if (arg === "--skip-tv") args.skipTv = true;
+    if (arg.startsWith("--pages=")) args.pages = Math.max(1, Number(arg.split("=")[1]) || 6);
+    if (arg.startsWith("--batch=")) args.batch = Math.max(1, Number(arg.split("=")[1]) || 5);
+    if (arg.startsWith("--watch=")) args.watchMinutes = Math.max(0, Number(arg.split("=")[1]) || 0);
+  }
+
+  return args;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function safeTime(value) {
+  const t = new Date(value || 0).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+function dedupeMovies(items) {
+  const byId = new Map();
+  for (const item of items) {
+    const imdb = String(item?.imdb_id || "").trim();
+    if (!imdb) continue;
+    const prev = byId.get(imdb);
+    if (!prev || safeTime(item?.time_added) > safeTime(prev?.time_added)) {
+      byId.set(imdb, item);
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => safeTime(b?.time_added) - safeTime(a?.time_added));
+}
+
+async function fetchPagesInBatches(fromPage, toPage, batchSize) {
+  const pages = [];
+  for (let page = fromPage; page <= toPage; page++) pages.push(page);
+
+  const all = [];
+  for (let i = 0; i < pages.length; i += batchSize) {
+    const batch = pages.slice(i, i + batchSize);
+    const rows = await Promise.all(
+      batch.map(async (page) => {
+        const data = await getJson(`https://vidsrc-embed.ru/movies/latest/page-${page}.json`).catch(() => null);
+        const result = Array.isArray(data?.result) ? data.result : [];
+        console.log(`  page-${page}: ${result.length} items`);
+        return result;
+      })
+    );
+    for (const r of rows) all.push(...r);
+  }
+  return all;
+}
+
+async function syncLatestMovies(options) {
+  const existing = readExistingMoviesFromTs();
+  const existingById = new Set(existing.map((x) => String(x?.imdb_id || "")).filter(Boolean));
+  const lastSeenTime = existing.reduce((max, x) => Math.max(max, safeTime(x?.time_added)), 0);
+
+  const first = await getJson("https://vidsrc-embed.ru/movies/latest/page-1.json");
+  const totalPages = Number(first?.pages || 1);
+  const maxPages = options.recentOnly ? Math.min(totalPages, options.pages) : totalPages;
+  const firstRows = Array.isArray(first?.result) ? first.result : [];
+
+  const fetched = [...firstRows];
+  let newCount = 0;
+  for (const item of firstRows) {
+    const imdb = String(item?.imdb_id || "").trim();
+    if (!imdb) continue;
+    if (!existingById.has(imdb) || safeTime(item?.time_added) > lastSeenTime) newCount++;
+  }
+
+  // Incremental paging: stop early once we reach old data only.
+  if (maxPages >= 2) {
+    for (let start = 2; start <= maxPages; start += options.batch) {
+      const end = Math.min(maxPages, start + options.batch - 1);
+      const batchRows = await fetchPagesInBatches(start, end, options.batch);
+      fetched.push(...batchRows);
+
+      let batchHasNew = false;
+      for (const item of batchRows) {
+        const imdb = String(item?.imdb_id || "").trim();
+        if (!imdb) continue;
+        if (!existingById.has(imdb) || safeTime(item?.time_added) > lastSeenTime) {
+          batchHasNew = true;
+          newCount++;
+        }
+      }
+      if (!batchHasNew && existing.length > 0) {
+        console.log(`  stopping early at page-${end}: no newer items found in this batch`);
+        break;
+      }
+    }
+  }
+
+  const all = dedupeMovies([...existing, ...fetched]);
+
+  const target = path.join(process.cwd(), "app", "data", "vidsrcLatestMovies.ts");
+  const header =
+    `// Auto-generated by scripts/daily-sync.js\n` +
+    `// Source: https://vidsrc-embed.ru/movies/latest/page-*.json\n` +
+    `// Synced at: ${new Date().toISOString()}\n` +
+    `// Mode: ${options.recentOnly ? `recent (first ${maxPages} pages)` : "full"}\n` +
+    `// Total movies: ${all.length}\n\n` +
+    `export interface VidsrcLatestMovie {\n` +
+    `  imdb_id: string;\n  tmdb_id: string;\n  title: string;\n  quality: string;\n  time_added: string;\n  embed_url: string;\n  embed_url_tmdb: string;\n}\n\n` +
+    `export const VID_SRC_LATEST_MOVIES: VidsrcLatestMovie[] = [\n`;
+
+  const rows = all
+    .map((m) => {
+      const title = String(m?.title || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      return (
+        `  {\n` +
+        `    imdb_id: "${m?.imdb_id || ""}",\n` +
+        `    tmdb_id: "${m?.tmdb_id || ""}",\n` +
+        `    title: "${title}",\n` +
+        `    quality: "${m?.quality || ""}",\n` +
+        `    time_added: "${m?.time_added || ""}",\n` +
+        `    embed_url: "${m?.embed_url || ""}",\n` +
+        `    embed_url_tmdb: "${m?.embed_url_tmdb || ""}",\n` +
+        `  }`
+      );
+    })
+    .join(",\n");
+
+  writeSafe(target, header + rows + "\n];\n");
+  console.log(
+    `Movies synced: ${all.length} total, ${newCount} new candidates (max pages considered: ${maxPages}/${totalPages})`
+  );
+}
+
+async function syncTvIds() {
+  const text = await getText("https://vidsrc.me/ids/tv_imdb.txt");
+  const ids = text
+    .split(/\s+/)
+    .filter((id) => /^tt\d{7,8}$/.test(id))
+    .filter((id, i, arr) => arr.indexOf(id) === i);
+
+  const target = path.join(process.cwd(), "app", "data", "tvSeriesIds.ts");
+  const content =
+    `// TV Series IDs from VidSrc\n` +
+    `// Total: ${ids.length} series\n` +
+    `// Source: https://vidsrc.me/ids/tv_imdb.txt\n` +
+    `// Last updated: ${new Date().toISOString()}\n\n` +
+    `export const TV_SERIES_IDS = [\n${ids.map((id) => `  '${id}',`).join("\n")}\n];\n`;
+
+  writeSafe(target, content);
+  console.log(`TV IDs synced: ${ids.length}`);
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const runOnce = async () => {
+    console.log("Starting daily sync...", args);
+    await syncLatestMovies(args);
+    if (!args.skipTv) await syncTvIds();
+    console.log("Daily sync completed.");
+  };
+
+  if (args.watchMinutes > 0) {
+    console.log(`Watch mode enabled: every ${args.watchMinutes} minute(s).`);
+    while (true) {
+      await runOnce().catch((e) => console.error("Sync cycle failed:", e));
+      await sleep(args.watchMinutes * 60 * 1000);
+    }
+  }
+
+  await runOnce();
+}
+
+main().catch((e) => {
+  console.error("Daily sync failed:", e);
+  process.exit(1);
+});

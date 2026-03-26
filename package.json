@@ -5,6 +5,9 @@
   "scripts": {
     "ref:home:sync": "node -e \"fetch('http://127.0.0.1:3000/api/reference/home?refresh=1').then(r=>r.text()).then(()=>console.log('OK')).catch(e=>{console.error(e);process.exit(1)})\"",
     "daily:sync": "node scripts/daily-sync.js",
+    "sync:recent": "node scripts/daily-sync.js --recent --pages=6 --batch=5",
+    "sync:recent:watch": "node scripts/daily-sync.js --recent --pages=6 --batch=5 --watch=1440",
+    "sync:daily:check": "node scripts/daily-sync.js --recent --pages=6 --batch=5",
     "dev": "next dev --turbopack",
     "build": "NODE_OPTIONS='--max-old-space-size=8192' next build",
     "start": "next start",
